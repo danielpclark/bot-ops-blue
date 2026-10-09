@@ -1,6 +1,6 @@
-# Claude Bot Ops Hub
+# Bot Ops Blue
 
-A borderless desktop operations dashboard for a fleet of Claude-powered bots,
+A borderless desktop operations dashboard for a fleet of bots,
 written in Ruby with [Shoes 3.3 "Walkabout"](https://github.com/shoes/shoes3).
 It reproduces the reference mock-up in `assets/reference-mockup.png`: bot
 fleet, live activity, workflows, task queue, pipeline chart, system health
