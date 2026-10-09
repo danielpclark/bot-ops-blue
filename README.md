@@ -22,8 +22,8 @@ Shoes screenshot, but it exercises every panel, page and timer path.
 2. Launch the app:
 
    ```sh
-   shoes bot_ops_hub.rb            # Linux / Windows (shoes on PATH)
-   open -a Shoes bot_ops_hub.rb    # macOS, or drag the file onto Shoes.app
+   shoes bot_ops_blue.rb            # Linux / Windows (shoes on PATH)
+   open -a Shoes bot_ops_blue.rb    # macOS, or drag the file onto Shoes.app
    ```
 
 The window opens without an OS title bar (`decorated: false`). Drag the header
@@ -34,7 +34,7 @@ toggle fullscreen, and quit. The same controls live on the **Settings** page.
 
 | File | Role | Toolkit |
 | --- | --- | --- |
-| `bot_ops_hub.rb` | Entry point: opens the Shoes window and boots the hub | Shoes |
+| `bot_ops_blue.rb` | Entry point: opens the Shoes window and boots the hub | Shoes |
 | `lib/bot_ops/hub.rb` | Header, sidebar, pages, drag-to-move, refresh loop | Shoes |
 | `lib/bot_ops/panels.rb` | Drawing for each dashboard panel | Shoes |
 | `lib/bot_ops/widgets.rb` | Primitives: panels, bars, donuts, line chart, tabs | Shoes |
@@ -71,7 +71,7 @@ class SocketChannel < BotOps::Comms::Channel
 end
 ```
 
-Then boot the hub with it in `bot_ops_hub.rb`:
+Then boot the hub with it in `bot_ops_blue.rb`:
 
 ```ruby
 boot(BotOps::Store.new, BotOps::Comms::Multiplexer.new(SocketChannel.new, BotOps::Comms::SimulatedChannel.new))
