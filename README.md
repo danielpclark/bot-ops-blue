@@ -1,59 +1,90 @@
 # Bot Ops Blue
 
-A borderless desktop operations dashboard for a fleet of bots,
-written in Ruby with [Shoes 3.3 "Walkabout"](https://github.com/shoes/shoes3).
+A borderless desktop operations dashboard for a fleet of bots. Ruby owns the
+data, layout and comms; a small Rust extension owns the window and rendering.
 It reproduces the reference mock-up in `assets/reference-mockup.png`: bot
 fleet, live activity, workflows, task queue, pipeline chart, system health
 gauges, recent activity, agent details, logs and reports, plus a sidebar that
 switches between full-size pages for each area.
 
-![reference](assets/reference-mockup.png)
+![Bot Ops Blue running](assets/preview.png)
 
-`assets/preview-mock-render.png` shows the same layout drawn by the test
-harness (a Shoes DSL stand-in that records drawing calls as SVG). It is not a
-Shoes screenshot, but it exercises every panel, page and timer path.
+## Setup
 
-## Running it
+You need Ruby 3.0+ and a Rust toolchain ([rustup.rs](https://rustup.rs), one
+command on macOS, Linux and Windows). Then:
 
-1. Install Shoes 3.3.x for your platform from the
-   [shoes3 releases](https://github.com/shoes/shoes3/releases) (macOS `.dmg`,
-   Linux `.install` script, Windows `.exe`). Shoes bundles its own Ruby, so
-   nothing else is needed.
-2. Launch the app:
+```sh
+bundle exec rake setup   # bundle install + cargo build of the native window
+bundle exec rake run     # start the dashboard
+```
 
-   ```sh
-   shoes bot_ops_blue.rb            # Linux / Windows (shoes on PATH)
-   open -a Shoes bot_ops_blue.rb    # macOS, or drag the file onto Shoes.app
-   ```
+`rake setup` prints what to install if `cargo` is missing. No GUI toolkit,
+no system packages: the window is pure Rust ([egui](https://github.com/emilk/egui)
+/ eframe) and the fonts are bundled in the extension.
 
-The window opens without an OS title bar (`decorated: false`). Drag the header
-bar to move it. The three glyphs in the top-right corner restore the title bar,
-toggle fullscreen, and quit. The same controls live on the **Settings** page.
+Other tasks:
 
-## Layout of the code
+| Task | What it does |
+| --- | --- |
+| `rake test` | Minitest suite over the store, comms, scene and frame protocol (no display or Rust needed) |
+| `rake preview` | Renders every page to SVG in `tmp/preview/` (no display or Rust needed) |
+| `rake compile` | Rebuilds just the native extension |
+| `rake clean` | Removes build artifacts |
 
-| File | Role | Toolkit |
-| --- | --- | --- |
-| `bot_ops_blue.rb` | Entry point: opens the Shoes window and boots the hub | Shoes |
-| `lib/bot_ops/hub.rb` | Header, sidebar, pages, drag-to-move, refresh loop | Shoes |
-| `lib/bot_ops/panels.rb` | Drawing for each dashboard panel | Shoes |
-| `lib/bot_ops/widgets.rb` | Primitives: panels, bars, donuts, line chart, tabs | Shoes |
-| `lib/bot_ops/store.rb` | All dashboard state plus the event API that updates it | none |
-| `lib/bot_ops/comms.rb` | Channel interface and the built-in simulator | none |
-| `lib/bot_ops/layout.rb` | Pixel geometry of every panel | none |
-| `lib/bot_ops/theme.rb` | Palette and typography | none |
+The window opens without an OS title bar. Drag the header bar to move it.
+The three glyphs in the top-right corner restore the title bar, toggle
+fullscreen, and quit. The same controls live on the **Settings** page.
 
-Only the three Shoes files touch the toolkit. If Shoes ever has to be swapped
-for something else (GTK via ruby-gnome, libui, or a Rust UI driven through
-Rutie), the store, comms, layout and theme carry over unchanged.
+## How it is put together
+
+```
+bot_ops_blue.rb             entry point
+lib/bot_ops/
+  store.rb                  all dashboard state + Store#apply(event)
+  comms.rb                  Channel interface, Multiplexer, SimulatedChannel
+  scene.rb                  builds a frame from the Store; handles clicks
+  panels.rb, widgets.rb     drawing of each panel, on top of Canvas
+  canvas.rb                 toolkit-independent display list (+ JSON, + SVG)
+  layout.rb, theme.rb       geometry and palette
+  native_host.rb            Ruby side of the Ruby <-> Rust protocol
+ext/bot_ops_native/         Rust crate: egui window, renderer, Rutie binding
+```
+
+The Ruby side never touches a GUI API. `Scene#build` produces a `Canvas`:
+a list of drawing commands (rounded rects, circles, lines, wedges, chart
+areas, text) plus clickable hit regions. The native side asks for a frame on
+every repaint and gets JSON back only when something changed, so idle
+repaints cost nothing on the Ruby side.
+
+### The Ruby <-> Rust protocol
+
+`BotOps::Native.run(host, width, height, title)` blocks until the window
+closes. While it runs, Rust calls two methods on `host`:
+
+| Call | Returns |
+| --- | --- |
+| `host.poll` | JSON frame (`cmds`, `hits`, `drag`) when something changed, else `""` |
+| `host.hit(id)` | A window command for hit region `id`: `"quit"`, `"fullscreen:on/off"`, `"decorations:on/off"`, or `""` |
+
+Rust handles the drag region (the header) natively, draws the frame, and
+executes the window commands. Everything else, including the two-second
+refresh tick, lives in Ruby (`BotOps::NativeHost`).
+
+### Why Rutie, and which version
+
+The extension is bound with [Rutie](https://github.com/danielpclark/rutie).
+Rutie releases track Ruby's special-constant layout, so the version has to
+match the Ruby in use: `rutie = "0.13"` for Ruby 3.x (what `Cargo.toml`
+pins), `0.14` for Ruby 4.0. Using 0.9 with Ruby 3 segfaults the first time a
+`nil` crosses the boundary, which is why the host protocol only exchanges
+strings and integers.
 
 ## Adding comms
 
-The UI never mutates state directly. Everything flows through
-`BotOps::Store#apply(event)`, where an event is a plain hash with a `type`
-key. A comms channel is any object that queues such hashes; the hub drains
-channels from a Shoes timer every two seconds so all drawing stays on the
-main thread.
+Everything flows through `BotOps::Store#apply(event)`, where an event is a
+plain hash with a `type` key. A comms channel is any object that queues such
+hashes; the host drains channels from the refresh tick on the main thread.
 
 ```ruby
 class SocketChannel < BotOps::Comms::Channel
@@ -74,7 +105,8 @@ end
 Then boot the hub with it in `bot_ops_blue.rb`:
 
 ```ruby
-boot(BotOps::Store.new, BotOps::Comms::Multiplexer.new(SocketChannel.new, BotOps::Comms::SimulatedChannel.new))
+channel = BotOps::Comms::Multiplexer.new(SocketChannel.new, BotOps::Comms::SimulatedChannel.new)
+BotOps::NativeHost.new(channel: channel).launch
 ```
 
 Supported event types (see `Store#apply`):
@@ -97,12 +129,12 @@ Supported event types (see `Store#apply`):
 | `fleet.total` | `total` |
 | `tick` | `seconds` |
 
-## Notes on Shoes
+## Platform notes
 
-* Window styles used: `decorated: false`, `resizable: false`, plus the
-  runtime `app.decorated=`, `app.fullscreen=`, `app.move`, `app.left/top`.
-  These exist in Shoes 3.3.4 and later (not in Shoes 4 or Scarpe).
-* Everything is absolutely positioned inside slots, so the layout does not
-  depend on font metrics. Text that could overflow a column is clipped.
-* Live panels are redrawn with `slot.clear { ... }`; static ones (workflows,
-  reports, settings) are drawn once.
+- **Linux**: needs an X11 or Wayland session with OpenGL (any desktop has
+  it). On a bare container add `libxkbcommon-x11-0`.
+- **macOS**: the extension is installed as `bot_ops_native.bundle`; Rutie
+  links against the Ruby you build with, so use the same Ruby to run.
+- **Windows**: build from a shell where `cargo` and `ruby` are on `PATH`
+  (RubyInstaller + rustup). The DLL is installed as `bot_ops_native.so`,
+  which is the extension Ruby expects there.

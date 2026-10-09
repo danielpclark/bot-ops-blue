@@ -1,0 +1,19 @@
+[package]
+name = "bot_ops_native"
+version = "0.1.0"
+edition = "2021"
+description = "Native window and renderer for Bot Ops Blue (egui/eframe, exposed to Ruby through Rutie)"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rutie = "0.13"
+eframe = { version = "0.29", default-features = false, features = ["glow", "x11", "wayland"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 2
+strip = true
