@@ -3,7 +3,7 @@
 # A borderless desktop operations dashboard for a fleet of bots,
 # written for Shoes 3.3 "Walkabout" (https://github.com/shoes/shoes3).
 #
-#   shoes bot_ops_hub.rb
+#   shoes bot_ops_blue.rb
 #
 # The window has no OS title bar: drag the header to move it, use the three
 # glyphs in the top-right corner to restore the title bar, go fullscreen, or
