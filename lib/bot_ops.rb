@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Claude Bot Ops Hub - library loader.
+# Bot Ops Blue - library loader.
 # Toolkit-agnostic pieces: theme, layout, store, comms.
 # Shoes-specific pieces:   widgets, panels, hub.
 require "bot_ops/theme"

@@ -1,6 +1,6 @@
-# Claude Bot Ops Hub
+# Bot Ops Blue
 #
-# A borderless desktop operations dashboard for a fleet of Claude-powered bots,
+# A borderless desktop operations dashboard for a fleet of bots,
 # written for Shoes 3.3 "Walkabout" (https://github.com/shoes/shoes3).
 #
 #   shoes bot_ops_hub.rb
@@ -15,7 +15,7 @@ lib = File.join(APP_ROOT, "lib")
 $LOAD_PATH.unshift(lib) unless $LOAD_PATH.include?(lib)
 require "bot_ops"
 
-Shoes.app(title: "Claude Bot Ops Hub",
+Shoes.app(title: "Bot Ops Blue",
           width: BotOps::Layout::WIDTH,
           height: BotOps::Layout::HEIGHT,
           resizable: false,

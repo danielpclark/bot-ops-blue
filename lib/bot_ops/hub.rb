@@ -65,7 +65,7 @@ module BotOps
         oval(left: 44, top: 30, width: 28, height: 28, fill: col(CYAN, 0.0), stroke: col(CYAN, 0.5), strokewidth: 1)
         txt("⌘", 36, 34, size: 14, color: CYAN, width: 44, align: "center")
 
-        txt("CLAUDE BOT OPS HUB", 108, 22, size: 20, color: CYAN, weight: "bold", kerning: 3)
+        txt("BOT OPS BLUE", 108, 22, size: 20, color: CYAN, weight: "bold", kerning: 3)
         txt("AUTOMATE   /   CREATE   /   SCALE", 110, 52, size: 9, color: MUTED, kerning: 2)
         vline(432, 18, hh - 18, col(CYAN, 0.25))
 
