@@ -3,17 +3,12 @@
 module BotOps
   # Bodies of each dashboard panel. Every method receives the body width and
   # height so the same drawing can be reused on the full-size sub pages.
+  # Coordinates are relative to the panel body (see Widgets#panel).
   module Panels
     include Theme
 
     ARROW = " → "
     CHECK = "✓"
-
-    # Truncate text that would otherwise run into the next column.
-    def clip(str, max_chars)
-      s = str.to_s
-      s.length > max_chars ? "#{s[0, [max_chars - 1, 1].max]}…" : s
-    end
 
     # ---- Bot fleet -----------------------------------------------------
 
@@ -24,14 +19,14 @@ module BotOps
         y = 2 + i * row_h
         hline(12, w - 12, y + row_h - 1, col(CYAN, 0.07)) if i < rows - 1
         avatar(14, y + 7, bot.color, bot.glyph, 30)
-        name = txt(bot.name, 56, y + 5, size: 10, color: TEXT, weight: "bold")
-        name.click { select_bot(bot.id) }
+        txt(bot.name, 56, y + 5, size: 10, color: TEXT, weight: :bold)
         txt(bot.role, 56, y + 21, size: 9, color: MUTED)
+        @c.hit(4, y, 186, row_h) { select_bot(bot.id) }
         status_pill(196, y + 6, bot.status)
         pct = bot.status == "Running" ? [bot.tasks * 8, 100].min : 4
         hbar(196, y + 27, 96, 4, pct, bot.status == "Running" ? bot.color : DIM, no_glow: true)
-        txt("#{bot.tasks} tasks", w - 100, y + 5, size: 9, color: bot.tasks.zero? ? DIM : TEXT, width: 88, align: "right")
-        txt(Store.duration(bot.uptime_s), w - 100, y + 21, size: 9, color: MUTED, width: 88, align: "right")
+        txt("#{bot.tasks} tasks", w - 100, y + 5, size: 9, color: bot.tasks.zero? ? DIM : TEXT, width: 88, align: :right)
+        txt(Store.duration(bot.uptime_s), w - 100, y + 21, size: 9, color: MUTED, width: 88, align: :right)
       end
     end
 
@@ -60,12 +55,12 @@ module BotOps
         bot = @store.bot(a.bot_id)
         box(10, y, w - 20, row_h - 6, fill: col(PANEL2), stroke: col(CYAN, 0.12), curve: 6)
         avatar(18, y + 4, bot ? bot.color : CYAN, bot ? bot.glyph : "?", 30)
-        txt(bot ? bot.name : a.bot_id.to_s, 58, y + 3, size: 10, color: TEXT, weight: "bold")
+        txt(bot ? bot.name : a.bot_id.to_s, 58, y + 3, size: 10, color: TEXT, weight: :bold)
         txt(a.task, 58, y + 19, size: 9, color: MUTED)
         txt(Store.ago(a.started_at), w - 292, y + 11, size: 9, color: MUTED)
         bar_color = a.status == "Failed" ? RED : (bot ? bot.color : CYAN)
         hbar(w - 234, y + 15, 88, 6, a.progress, bar_color)
-        txt("#{a.progress}%", w - 140, y + 11, size: 9, color: TEXT, width: 34, align: "right")
+        txt("#{a.progress}%", w - 140, y + 11, size: 9, color: TEXT, width: 34, align: :right)
         if a.status == "Completed"
           txt("#{CHECK} Completed", w - 92, y + 11, size: 9, color: TEAL)
         else
@@ -83,10 +78,10 @@ module BotOps
         y = 4 + i * (card_h + 6)
         box(10, y, w - 20, card_h, fill: col(PANEL2), stroke: col(wf.color, 0.25), curve: 7)
         square_icon(18, y + 11, wf.color, wf.glyph, 30)
-        txt(wf.name, 58, y + 9, size: 10, color: TEXT, weight: "bold")
+        txt(wf.name, 58, y + 9, size: 10, color: TEXT, weight: :bold)
         txt(wf.steps.join(ARROW), 58, y + 27, size: 9, color: MUTED)
         status_pill(w - 110, y + 12, wf.status)
-        txt("#{wf.done}/#{wf.total}", w - 60, y + 28, size: 9, color: MUTED, width: 40, align: "right")
+        txt("#{wf.done}/#{wf.total}", w - 60, y + 28, size: 9, color: MUTED, width: 40, align: :right)
         hbar(w - 108, y + 32, 44, 3, wf.done * 100.0 / wf.total, wf.color, no_glow: true)
       end
     end
@@ -104,7 +99,7 @@ module BotOps
         tw = tab(tx, 4, "#{text} (#{n})", @store.queue_filter == key, color: color) { set_queue_filter(key) }
         tx += tw + 6
       end
-      QUEUE_COLS.each { |x, name| label(name, x, 34, size: 8, color: DIM, weight: "bold") }
+      QUEUE_COLS.each { |x, name| label(name, x, 34, size: 8, color: DIM, weight: :bold) }
       hline(10, w - 10, 48, col(CYAN, 0.12))
 
       row_h = 22
@@ -116,7 +111,7 @@ module BotOps
         hline(10, w - 10, y + row_h - 1, col(CYAN, 0.05))
         txt("##{t.id}", 14, y + 3, size: 9, color: MUTED, mono: true)
         txt(t.title, 62, y + 3, size: 9, color: TEXT)
-        dot(176, y + 8, Theme.status_color("Running"), 4)
+        dot(176, y + 8, col(Theme.status_color("Running")), 4)
         txt(t.agent, 184, y + 3, size: 9, color: TEXT)
         priority_pill(282, y + 4, t.priority)
         status_pill(346, y + 4, t.status)
@@ -132,14 +127,14 @@ module BotOps
       gap = (w - 32 - stages.size * bw) / (stages.size - 1)
       stages.each_with_index do |s, i|
         x = 16 + i * (bw + gap)
-        rect(left: x, top: 6, width: bw, height: 56, curve: 8, fill: col(PANEL2), stroke: col(CYAN, 0.55), strokewidth: 1)
-        rect(left: x + 2, top: 8, width: bw - 4, height: 52, curve: 7, fill: col(CYAN, 0.03), stroke: col(CYAN, 0.12))
+        @c.rect(x, 6, bw, 56, curve: 8, fill: col(PANEL2), stroke: col(CYAN, 0.55))
+        @c.rect(x + 2, 8, bw - 4, 52, curve: 7, fill: col(CYAN, 0.03), stroke: col(CYAN, 0.12))
         square_icon(x + 8, 16, CYAN, s[:glyph], 26)
-        txt(s[:name], x + 42, 13, size: 10, color: CYAN, weight: "bold")
+        txt(s[:name], x + 42, 13, size: 10, color: CYAN, weight: :bold)
         txt("#{s[:count]} items", x + 42, 31, size: 9, color: TEXT)
         if i < stages.size - 1
           ax = x + bw + gap / 2
-          txt("→", ax - 8, 24, size: 12, color: CYAN, width: 16, align: "center")
+          txt("→", ax - 8, 24, size: 12, color: CYAN, width: 16, align: :center)
         end
       end
       chart_w = w - 120
@@ -167,7 +162,7 @@ module BotOps
         box(x, 118, mw - 6, [h - 126, 60].min, fill: col(PANEL2), stroke: col(CYAN, 0.12), curve: 7)
         txt(glyph, x + 12, 128, size: 11, color: TEAL)
         txt(name, x + 30, 128, size: 9, color: MUTED)
-        txt(value, x + 12, 148, size: 13, color: TEXT, weight: "bold")
+        txt(value, x + 12, 148, size: 13, color: TEXT, weight: :bold)
       end
     end
 
@@ -186,10 +181,10 @@ module BotOps
         y = 2 + i * row_h
         bot = @store.bot(e.bot_id)
         avatar(14, y + 3, bot ? bot.color : CYAN, bot ? bot.glyph : "?", 20)
-        txt(bot ? bot.name : e.bot_id.to_s, 42, y + 5, size: 9, color: TEXT, weight: "bold")
-        dot(150, y + 10, bot ? bot.color : CYAN, 5)
+        txt(bot ? bot.name : e.bot_id.to_s, 42, y + 5, size: 9, color: TEXT, weight: :bold)
+        dot(150, y + 10, col(bot ? bot.color : CYAN), 5)
         txt(clip(e.message, (w - 240) / 6), 160, y + 5, size: 9, color: TEXT)
-        txt(Store.ago(e.at), w - 70, y + 5, size: 9, color: MUTED, width: 58, align: "right")
+        txt(Store.ago(e.at), w - 70, y + 5, size: 9, color: MUTED, width: 58, align: :right)
       end
     end
 
@@ -199,7 +194,7 @@ module BotOps
       bot = @store.selected_bot
       d = agent_detail_for(bot)
       avatar(16, 6, bot.color, bot.glyph, 44)
-      txt(bot.name, 72, 6, size: 11, color: TEXT, weight: "bold")
+      txt(bot.name, 72, 6, size: 11, color: TEXT, weight: :bold)
       status_pill(72, 25, bot.status)
       txt("#{bot.tasks} active tasks", 72, 38, size: 9, color: MUTED)
       txt("☰", w - 26, 6, size: 11, color: MUTED)
@@ -209,7 +204,7 @@ module BotOps
       label("Current Task", 22, 68, size: 9, color: MUTED)
       txt(clip(d[:task], 30), 22, 82, size: 9, color: TEXT)
       hbar(22, 102, col_w - 56, 6, d[:progress], bot.color)
-      txt("#{d[:progress]}%", 22 + col_w - 50, 96, size: 9, color: TEXT, width: 34, align: "right")
+      txt("#{d[:progress]}%", 22 + col_w - 50, 96, size: 9, color: TEXT, width: 34, align: :right)
       label("Started", 22, 118, size: 9, color: MUTED)
       txt(Store.ago(d[:started_at]), 80, 118, size: 9, color: TEXT)
       label("Model", 22, 136, size: 9, color: MUTED)
@@ -257,7 +252,7 @@ module BotOps
       @store.reports.first(rows).each_with_index do |r, i|
         y = 2 + i * row_h
         square_icon(14, y + 3, r.color, r.kind == "PDF" ? "☰" : "∴", 24)
-        txt(r.name, 48, y + 2, size: 9, color: TEXT, weight: "bold")
+        txt(r.name, 48, y + 2, size: 9, color: TEXT, weight: :bold)
         txt(r.at.strftime("%b %-d, %Y %H:%M"), 48, y + 17, size: 8, color: MUTED)
       end
     end
@@ -266,12 +261,11 @@ module BotOps
 
     def draw_settings_body(w, _h)
       rows = [
-        ["Window",         "Borderless (decorated: false), #{Layout::WIDTH}x#{Layout::HEIGHT}"],
-        ["Comms channel",  @channel.name],
-        ["Refresh",        "every #{Hub::REFRESH_SECONDS}s"],
-        ["Shoes",          (defined?(Shoes::RELEASE_NAME) ? "#{Shoes::RELEASE_NAME} #{Shoes::VERSION rescue ''}" : "unknown")],
-        ["Ruby",           RUBY_VERSION],
-        ["Platform",       RUBY_PLATFORM]
+        ["Window",        "Borderless, #{Layout::WIDTH}x#{Layout::HEIGHT}"],
+        ["Toolkit",       @host.toolkit_name],
+        ["Comms channel", @host.channel_name],
+        ["Refresh",       "every #{Scene::REFRESH_SECONDS}s"],
+        ["Ruby",          "#{RUBY_VERSION} (#{RUBY_PLATFORM})"]
       ]
       rows.each_with_index do |(k, v), i|
         y = 10 + i * 24
@@ -280,12 +274,9 @@ module BotOps
       end
       y = 10 + rows.size * 24 + 10
       txt("Window", 16, y, size: 9, color: MUTED)
-      b1 = txt("[ Toggle title bar ]", 150, y, size: 9, color: CYAN)
-      b1.click { toggle_decorations }
-      b2 = txt("[ Toggle fullscreen ]", 300, y, size: 9, color: CYAN)
-      b2.click { toggle_fullscreen }
-      b3 = txt("[ Quit ]", 460, y, size: 9, color: RED)
-      b3.click { quit_app }
+      link("[ Toggle title bar ]", 150, y) { @host.toggle_decorations }
+      link("[ Toggle fullscreen ]", 300, y) { @host.toggle_fullscreen }
+      link("[ Quit ]", 460, y, color: RED) { @host.quit }
       txt("Drag the header bar to move the window.", 16, y + 28, size: 9, color: DIM, width: w - 32)
     end
   end
