@@ -195,8 +195,10 @@ the hook does nothing, so it is harmless locally and for collaborators.
    from the reporter (`rake cloud:setup_script`), which it embeds, so it
    needs no download.
 
-   The hook only reports when `CLAUDE_CODE_REMOTE=true` (set by Claude Code
-   on the web) and `BOT_OPS_URL` is set; local sessions on the Mac or in VS
+   The hook only reports when `CLAUDE_CODE_REMOTE=true` and `BOT_OPS_URL`
+   is set. Despite the name, `CLAUDE_CODE_REMOTE` is the documented
+   cloud-session marker (set to `true` on the session VM, never locally),
+   unrelated to Remote Control; local sessions on the Mac or in VS
    Code are read from disk already and never report twice.
 
    *Fallback, per repo:* the cloud docs list hooks "from the repository and

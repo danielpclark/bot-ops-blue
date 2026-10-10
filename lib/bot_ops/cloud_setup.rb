@@ -26,8 +26,9 @@ module BotOps
         # Paste this whole file into the environment's Setup script. It installs
         # the cloud reporter as a user-level hook on the session VM, for every repo
         # opened in this environment; nothing is committed to any repository.
-        # The hook only reports when CLAUDE_CODE_REMOTE=true and BOT_OPS_URL is set
-        # (an environment variable); the tunnel's password is a network secret.
+        # The hook only reports when CLAUDE_CODE_REMOTE=true (the cloud-session
+        # marker, set on this VM and never locally; not Remote Control) and
+        # BOT_OPS_URL is set; the tunnel's password is a network secret.
         # Every step is best-effort: a failure here never stops a session.
 
         mkdir -p "$HOME/.claude/hooks" || true

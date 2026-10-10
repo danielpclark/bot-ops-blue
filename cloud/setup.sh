@@ -5,8 +5,9 @@
 # Paste this whole file into the environment's Setup script. It installs
 # the cloud reporter as a user-level hook on the session VM, for every repo
 # opened in this environment; nothing is committed to any repository.
-# The hook only reports when CLAUDE_CODE_REMOTE=true and BOT_OPS_URL is set
-# (an environment variable); the tunnel's password is a network secret.
+# The hook only reports when CLAUDE_CODE_REMOTE=true (the cloud-session
+# marker, set on this VM and never locally; not Remote Control) and
+# BOT_OPS_URL is set; the tunnel's password is a network secret.
 # Every step is best-effort: a failure here never stops a session.
 
 mkdir -p "$HOME/.claude/hooks" || true
@@ -27,10 +28,12 @@ leaves the session. Alternatively set BOT_OPS_TOKEN (visible to anyone
 using the environment): it is sent as HTTP Basic auth, "botops:<token>",
 which the ngrok edge and the collector both accept.
 
-It only runs in cloud sessions: unless CLAUDE_CODE_REMOTE is "true" (set by
-Claude Code on the web) and BOT_OPS_URL is set, it does nothing, so local
-sessions on the Mac or in VS Code (which the dashboard already reads
-directly) never report twice. It never prints (stdout
+It only runs in cloud sessions: unless CLAUDE_CODE_REMOTE is "true" and
+BOT_OPS_URL is set, it does nothing, so local sessions on the Mac or in VS
+Code (which the dashboard already reads directly) never report twice.
+Despite its name, CLAUDE_CODE_REMOTE is the cloud-session marker, not
+Remote Control: Anthropic's cloud environment docs say the session VM's
+environment carries it as "true" and it's never "true" locally. It never prints (stdout
 from some hooks is fed back to Claude), always exits 0, and sends from a
 forked background process so a session never waits on the network.
 
