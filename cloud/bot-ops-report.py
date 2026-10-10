@@ -24,9 +24,10 @@ from some hooks is fed back to Claude), always exits 0, and sends from a
 forked background process so a session never waits on the network.
 
 Only these fields leave the session: session id, event name, cwd, git
-branch, model, a 300-character prompt excerpt, the tool name and a
-160-character detail (command, file path, pattern or URL), and
-notification text. File contents and tool output are never sent.
+branch, model, the session's title (the one the claude.ai sidebar shows,
+read from the transcript's title records), a 300-character prompt excerpt,
+the tool name and a 160-character detail (command, file path, pattern or
+URL), and notification text. File contents and tool output are never sent.
 
 Standard library only (Python 3.6+).
 """
@@ -73,6 +74,51 @@ def trim(payload):
     return ev
 
 
+TITLE_CACHE = os.path.expanduser("~/.cache/bot-ops-blue")
+
+
+def session_title(transcript, session_id):
+    """The session's title: the latest name it was given by hand (custom-title),
+    else the latest generated one (ai-title), as the claude.ai sidebar shows.
+    Reads only what was appended since the previous event (offset cached)."""
+    if not transcript or not os.path.isfile(transcript):
+        return None
+    cache = os.path.join(TITLE_CACHE, "".join(c for c in session_id if c.isalnum() or c in "-_") + ".json")
+    try:
+        with open(cache) as f:
+            state = json.load(f)
+    except Exception:
+        state = {}
+    offset = state.get("offset", 0)
+    if os.path.getsize(transcript) < offset:
+        offset, state = 0, {}
+    with open(transcript, "rb") as f:
+        f.seek(offset)
+        for line in f:
+            if not line.endswith(b"\n"):
+                break  # partial line; read it next time
+            offset += len(line)
+            if b"-title" not in line:
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if rec.get("type") == "custom-title" and rec.get("customTitle"):
+                state["custom"] = rec["customTitle"]
+            elif rec.get("type") == "ai-title" and rec.get("aiTitle"):
+                state["ai"] = rec["aiTitle"]
+    state["offset"] = offset
+    try:
+        os.makedirs(TITLE_CACHE, exist_ok=True)
+        with open(cache, "w") as f:
+            json.dump(state, f)
+    except OSError:
+        pass
+    title = state.get("custom") or state.get("ai")
+    return title.strip()[:120] if title else None
+
+
 def main():
     url = os.environ.get("BOT_OPS_URL", "").rstrip("/")
     token = os.environ.get("BOT_OPS_TOKEN", "")
@@ -81,11 +127,18 @@ def main():
     payload = json.load(sys.stdin)
     if not isinstance(payload, dict) or not payload.get("session_id"):
         return
-    body = json.dumps(trim(payload)).encode()
+    ev = trim(payload)
     if os.fork() != 0:
-        return  # the hook returns at once; the child does the network call
+        return  # the hook returns at once; the child does the rest
     try:
         os.setsid()
+        try:
+            title = session_title(payload.get("transcript_path"), ev["session_id"])
+            if title:
+                ev["title"] = title
+        except Exception:
+            pass
+        body = json.dumps(ev).encode()
         headers = {"Content-Type": "application/json", "ngrok-skip-browser-warning": "1"}
         if token:  # Basic, because the ngrok edge's basic-auth checks it first
             headers["Authorization"] = "Basic " + base64.b64encode(("botops:" + token).encode()).decode()

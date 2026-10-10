@@ -86,6 +86,11 @@ class ProbeTest < Minitest::Test
     refute snap["recent"].any? { |s| s["id"] == SID }, "live sessions are not repeated as recent"
   end
 
+  def test_a_title_given_by_hand_beats_the_generated_one
+    write(@transcript, [line("custom-title", "customTitle" => "My rename"), line("ai-title", "aiTitle" => "Later generated")], "a")
+    assert_equal "My rename", @probe.snapshot(@now)["sessions"].first["title"]
+  end
+
   def test_refresh_reads_only_appended_lines
     @probe.snapshot(@now)
     write(@transcript, [assistant("m3", 7, [{ "type" => "tool_use", "name" => "Edit", "input" => { "file_path" => "/x.rb" } }])], "a")

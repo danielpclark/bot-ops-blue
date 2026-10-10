@@ -40,6 +40,14 @@ class CloudFeedTest < Minitest::Test
     assert_equal "ended", @feed.snapshot["recent"].first["status"]
   end
 
+  def test_the_sessions_own_title_beats_one_made_from_its_prompt
+    @feed.ingest(ev("UserPromptSubmit", "prompt" => "fix the parser", "at" => @now - 20))
+    assert_equal "fix the parser", @feed.snapshot["sessions"].first["name"]
+    @feed.ingest(ev("PostToolUse", "tool_name" => "Read", "title" => "Library edge cases", "at" => @now - 10))
+    @feed.ingest(ev("UserPromptSubmit", "prompt" => "and the tests", "at" => @now - 5))
+    assert_equal "Library edge cases", @feed.snapshot["sessions"].first["name"]
+  end
+
   def test_history_survives_a_restart_and_old_events_are_dropped
     @feed.ingest(ev("UserPromptSubmit", "prompt" => "hello"))
     File.open(@log, "a") { |f| f.puts JSON.generate(ev("UserPromptSubmit", "prompt" => "old", "at" => @now - 30 * 3600)) }
@@ -131,6 +139,29 @@ class CloudReporterTest < Minitest::Test
     assert_nil IO.select([server], nil, nil, 1.5), "no request without CLAUDE_CODE_REMOTE=true"
   ensure
     server&.close
+  end
+
+  # The claude.ai sidebar shows the session's title: the hand-given one if it
+  # was renamed, else the generated one. Both live in the transcript.
+  def test_reporter_sends_the_sessions_title_from_its_transcript
+    skip "python3 not installed" unless system("python3", "-c", "1", out: File::NULL, err: File::NULL)
+    Dir.mktmpdir do |home|
+      transcript = File.join(home, "t.jsonl")
+      File.write(transcript, [{ "type" => "ai-title", "aiTitle" => "Library edge cases" }].map { |r| JSON.generate(r) + "\n" }.join)
+      got = Queue.new
+      c = BotOps::Collector.new("127.0.0.1:0", TOKEN, on_event: ->(e) { got << e; true }) { |_| }.start
+      env = { "HOME" => home, "BOT_OPS_URL" => "http://#{c.address}", "BOT_OPS_TOKEN" => TOKEN, "CLAUDE_CODE_REMOTE" => "true" }
+      fire = -> { run_hook({ "session_id" => "s1", "hook_event_name" => "Stop", "transcript_path" => transcript }, env); got.pop(timeout: 5) }
+      assert_equal "Library edge cases", fire.call["title"]
+
+      File.open(transcript, "a") { |f| f.puts JSON.generate("type" => "custom-title", "customTitle" => "Renamed by hand") }
+      assert_equal "Renamed by hand", fire.call["title"]
+      File.open(transcript, "a") { |f| f.puts JSON.generate("type" => "ai-title", "aiTitle" => "Newer generated title") }
+      assert_equal "Renamed by hand", fire.call["title"], "a hand-given title wins over later generated ones"
+      refute fire.call.key?("transcript_path"), "the transcript path itself is not sent"
+    ensure
+      c&.stop
+    end
   end
 
   def test_reporter_does_nothing_without_configuration

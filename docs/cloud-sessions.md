@@ -197,12 +197,14 @@ pbcopy < cloud/setup.sh
 The script installs the reporter as a user-level hook on the session VM and
 merges it into any existing `~/.claude/settings.json` there.
 
-> **Note.** Claude Code's documentation describes hosted cloud sessions
-> running hooks "from the repository and from your organization's
-> server-managed settings"; a user-level settings file written on the VM by
-> the setup script isn't mentioned either way. Step 5 confirms it for your
-> environment, and [per-repository hooks](#per-repository-hooks) are the
-> documented alternative if it doesn't. It embeds the
+Hosted cloud sessions load hooks from this user-level settings file. Claude
+Code's documentation only lists hooks "from the repository and from your
+organization's server-managed settings", but sessions in different
+repositories, with nothing committed to them, report through this hook.
+
+When this project updates the reporter, regenerate and paste the script
+again (`rake cloud:setup_script`, then copy `cloud/setup.sh`). Sessions
+started afterwards get the new version; ones already running keep theirs. It embeds the
 reporter, so it downloads nothing, and every step is best-effort, so it can
 never stop a session from starting. If you already have a setup script,
 append this one to it.
@@ -241,7 +243,7 @@ Only these fields, and only from cloud sessions:
 
 | Sent | Never sent |
 | --- | --- |
-| Session id, event name, working directory, git branch, model | File contents |
+| Session id, event name, working directory, git branch, model, the session's title | File contents |
 | A 300-character prompt excerpt | Tool output |
 | Tool name and a 160-character detail (command, file path, pattern, URL) | Your environment variables or secrets |
 | Notification text (e.g. a permission prompt) | Transcripts |
@@ -253,8 +255,10 @@ stored only on your machine.
 
 | Symptom | Check |
 | --- | --- |
+| From a cloud session, `curl -s -o /dev/null -w '%{http_code}' "$BOT_OPS_URL/v1/health"` gives `401`, with `Www-Authenticate: Basic realm="bot-ops-blue"` | The network secret isn't attached as Basic auth. Most often its **Prefix** was left as `Bearer`; it must be `Basic`. Secrets can't be edited: delete it, add it again, and test from a new session. |
 | Nothing appears for a new session | Is the tunnel running, and do the three `curl` checks pass? Is `BOT_OPS_URL` exactly your `https://` URL with no trailing path? Does the network secret's list mark it **Not sent**? The note under it says why. |
-| Still nothing | Ask Claude in the session to run `/hooks` (it only displays them). If the Bot Ops hooks aren't listed, sessions in your environment don't load user-level hooks; use [a per-repository hook](#per-repository-hooks) instead. |
+| Still nothing | Type `/hooks` in the session to list its hooks. If the Bot Ops hooks aren't there, the setup script didn't run for this session: it started before you saved the script, or it runs in a different environment. |
+| A cloud session is named after its project, not its claude.ai title | It runs a reporter from before titles were sent. Sessions started after you paste the current `cloud/setup.sh` report their title, including one you renamed by hand. |
 | `ERR_NGROK_2263` when starting the tunnel | The policy uses a paid ngrok feature. Regenerate it with `rake ngrok:policy`; the shipped template uses only free actions. |
 | `ERR_NGROK_334` | ngrok is already running for that domain, perhaps in another terminal. |
 | The `-u` check gives 401 | The token changed after the policy was written. Run `rake ngrok:policy` again, restart the tunnel, and replace the network secret. |

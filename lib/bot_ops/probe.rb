@@ -341,7 +341,12 @@ module BotOps
         s["last_at"] = [s["last_at"].to_f, at].max if at
         recent = at && at >= cutoff
         case d["type"]
-        when "ai-title" then s["title"] = d["aiTitle"] unless sidechain
+        # A title given by hand (/rename, the claude.ai sidebar) beats the generated one.
+        when "ai-title" then s["title"] = d["aiTitle"] unless sidechain || s["custom_title"]
+        when "custom-title"
+          unless sidechain || d["customTitle"].to_s.strip.empty?
+            s["title"] = s["custom_title"] = d["customTitle"]
+          end
         when "last-prompt" then s["last_prompt"] = one_line(d["lastPrompt"]) unless sidechain
         when "assistant" then ingest_assistant(s, d["message"], sidechain, at, recent)
         when "user" then ingest_user(s, d, sidechain, at, recent)

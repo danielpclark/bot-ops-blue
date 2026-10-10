@@ -65,12 +65,21 @@ module BotOps
 
     def apply(e, at)
       sid = e["session_id"]
-      s = (@sessions[sid] ||= { "id" => sid, "name" => "cloud #{sid[0, 6]}", "kind" => "cloud", "entrypoint" => "cloud",
+      # Until the session reports its title (reporters older than that never
+      # do), name it after its project rather than an id.
+      fallback = e["cwd"].to_s.empty? ? "cloud #{sid[0, 6]}" : File.basename(e["cwd"].to_s)
+      s = (@sessions[sid] ||= { "id" => sid, "name" => fallback, "kind" => "cloud", "entrypoint" => "cloud",
                                 "status" => "idle", "started_at" => at, "last_at" => at, "tool_calls" => 0,
                                 "errors" => 0, "prompts" => 0, "tokens" => {} })
       s["cwd"] ||= e["cwd"]
       s["branch"] = e["branch"] if e["branch"].is_a?(String) && !e["branch"].empty?
       s["model"] = e["model"] if e["model"].is_a?(String)
+      # The session's own title (as the claude.ai sidebar shows it) beats a
+      # name made up from its first prompt.
+      if e["title"].is_a?(String) && !e["title"].strip.empty?
+        s["title"] = e["title"].strip
+        s["titled"] = true
+      end
       s["last_at"] = [s["last_at"], at].max
       hour = (at.to_i / 3600) * 3600
       case e["hook_event_name"]
@@ -80,7 +89,7 @@ module BotOps
         s["prompts"] += 1
         s["prompt_at"] = [s["prompt_at"].to_f, at].max
         s["last_prompt"] = text.lines.first.to_s.strip[0, 160]
-        s["title"] ||= s["last_prompt"][0, 80] unless text.empty?
+        s["title"] ||= s["last_prompt"][0, 80] unless text.empty? || s["titled"]
         @buckets[hour][2] += 1
         event(s, at, "prompt", "prompt", s["last_prompt"])
       when "PostToolUse", "PostToolUseFailure"
