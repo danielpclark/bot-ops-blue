@@ -13,20 +13,26 @@ module BotOps
     include Panels
 
     REFRESH_SECONDS = 2
-    STAT_WIDTHS = [104, 96, 126, 158, 116].freeze
-    STATIC_PANELS = [:workflows, :reports, :settings].freeze
+    STAT_WIDTHS = [112, 100, 120, 140, 128].freeze
 
-    attr_reader :store, :host
+    attr_reader :store, :host, :width, :height
 
     def initialize(store, host)
       @store = store
       @host = host
+      resize(Layout::WIDTH, Layout::HEIGHT)
+    end
+
+    # Lays out for a window of +w+ x +h+ points (never below the design size).
+    def resize(w, h)
+      @width = [w.to_i, Layout::WIDTH].max
+      @height = [h.to_i, Layout::HEIGHT].max
     end
 
     # Fill a canvas with the current frame.
-    def build(canvas = Canvas.new(Layout::WIDTH, Layout::HEIGHT))
+    def build(canvas = Canvas.new(@width, @height))
       @c = canvas
-      @c.rect(0, 0, Layout::WIDTH, Layout::HEIGHT, fill: col(BG))
+      @c.rect(0, 0, @width, @height, fill: col(BG))
       draw_header
       draw_sidebar
       @c.group(Layout::CONTENT_X, Layout::CONTENT_Y) { draw_page(@store.page) }
@@ -36,7 +42,8 @@ module BotOps
     # ---- header --------------------------------------------------------
 
     def draw_header
-      w = Layout::WIDTH
+      w = @width
+      dx = w - Layout::WIDTH # right-hand header items stay pinned to the right edge
       hh = Layout::HEADER_H
       @c.rect(12, 6, w - 24, hh - 12, curve: 8, fill: col(PANEL), stroke: col(CYAN, 0.3))
       @c.line(60, 7, w - 60, 7, stroke: col(CYAN, 0.45))
@@ -54,24 +61,28 @@ module BotOps
       @store.stats.each_with_index do |s, i|
         label(s.label, x, 24, size: 8, color: MUTED, kerning: 1)
         txt(s.value, x, 40, size: 20, color: TEXT, weight: :bold)
-        arrow = s.delta_dir == :down ? "↓" : "↑"
         off = 10 + s.value.length * 12
-        txt("#{arrow} #{s.delta}", x + off, 46, size: 9, color: s.delta_color)
+        txt(clip(s.note, (STAT_WIDTHS[i] - off - 12) / 5), x + off, 46, size: 8, color: s.note_color)
         x += STAT_WIDTHS[i] || 110
         vline(x - 10, 22, hh - 22, col(CYAN, 0.12))
       end
 
-      online = @store.system_online
-      glow_dot(1136, 33, col(online ? GREEN : RED), 7)
-      txt(online ? "SYSTEM ONLINE" : "SYSTEM OFFLINE", 1150, 28, size: 9, color: online ? GREEN : RED, weight: :bold)
-      txt(clock_text, 1150, 48, size: 9, color: TEXT)
-      vline(1312, 20, hh - 20, col(CYAN, 0.25))
-      txt(@store.quote, 1330, 22, size: 9, color: TEAL, width: 176)
+      online = @store.online_machines.size
+      ok = online.positive? && @store.probe_error.nil?
+      status = if @store.probe_error then "PROBE ERROR"
+               elsif online.zero? then "WAITING FOR DATA"
+               else "#{online} MACHINE#{'S' unless online == 1} ONLINE"
+               end
+      glow_dot(dx + 1136, 33, col(ok ? GREEN : (online.zero? ? YELLOW : RED)), 7)
+      txt(status, dx + 1150, 28, size: 9, color: ok ? GREEN : (online.zero? ? YELLOW : RED), weight: :bold)
+      txt(clock_text, dx + 1150, 48, size: 9, color: TEXT)
+      vline(dx + 1312, 20, hh - 20, col(CYAN, 0.25))
+      txt(@store.collector_status, dx + 1330, 22, size: 9, color: TEAL, width: 128)
 
       # window controls (a borderless window has none of its own)
       [["▣", 1468, :toggle_decorations], ["⤢", 1486, :toggle_fullscreen], ["✕", 1504, :quit]].each do |glyph, bx, action|
-        txt(glyph, bx, 8, size: 9, color: MUTED, width: 14, align: :center)
-        @c.hit(bx - 3, 4, 20, 20) { @host.send(action) }
+        txt(glyph, dx + bx, 8, size: 9, color: MUTED, width: 14, align: :center)
+        @c.hit(dx + bx - 3, 4, 20, 20) { @host.send(action) }
       end
     end
 
@@ -90,7 +101,7 @@ module BotOps
       x = Layout::SIDEBAR_X
       w = Layout::SIDEBAR_W
       @c.group(x, Layout::CONTENT_Y) do
-        @c.rect(0, 0, w, Layout::CONTENT_H, curve: 8, fill: col(PANEL), stroke: col(CYAN, 0.3))
+        @c.rect(0, 0, w, Layout.content_h(@height), curve: 8, fill: col(PANEL), stroke: col(CYAN, 0.3))
         Layout::NAV.each_with_index do |(key, name, glyph), i|
           y = 6 + i * 62
           active = @store.page == key
@@ -115,29 +126,29 @@ module BotOps
     end
 
     def draw_page(key)
-      cw = Layout::CONTENT_W
-      ch = Layout::CONTENT_H
+      cw = Layout.content_w(@width)
+      ch = Layout.content_h(@height)
       cx = Layout::CONTENT_X
       cy = Layout::CONTENT_Y
       half = (cw - Layout::GAP) / 2
       case key
-      when :bots
-        place(:fleet, "BOT FLEET", [cx, cy, half, ch], right: "#{@store.fleet_total} total")
-        place(:agent, "AGENT DETAILS", [cx + half + Layout::GAP, cy, half, 300])
-        place(:recent, "RECENT ACTIVITY", [cx + half + Layout::GAP, cy + 312, half, ch - 312])
-      when :workflows
-        place(:workflows, "WORKFLOWS", [cx, cy, cw, ch], right: "● Active", right_color: TEAL)
-      when :queue
-        place(:queue, "TASK QUEUE", [cx, cy, cw, ch])
-      when :data
-        place(:pipeline, "CURRENT PIPELINE", [cx, cy, cw - 300 - Layout::GAP, ch])
-        place(:reports, "RECENT REPORTS", [cx + cw - 300, cy, 300, ch], right: "View All")
+      when :sessions
+        place(:sessions, "CLAUDE SESSIONS", [cx, cy, half, ch], right: "#{@store.sessions.size} live")
+        place(:detail, "SESSION DETAILS", [cx + half + Layout::GAP, cy, half, 300])
+        place(:prompts, "RECENT PROMPTS", [cx + half + Layout::GAP, cy + 312, half, ch - 312])
+      when :projects
+        place(:projects, "PROJECTS · 24H", [cx, cy, cw, ch], right: "#{@store.projects.size} active", right_color: TEAL)
+      when :tools
+        place(:tools, "TOOL CALLS", [cx, cy, cw, ch])
+      when :usage
+        place(:usage, "USAGE", [cx, cy, cw - 300 - Layout::GAP, ch])
+        place(:machines, "MACHINES", [cx + cw - 300, cy, 300, ch])
       when :logs
-        place(:logs, "RECENT LOGS", [cx, cy, cw, ch], right: "View All")
-      when :analytics
-        place(:health, "SYSTEM HEALTH", [cx, cy, half, 300])
-        place(:pipeline, "CURRENT PIPELINE", [cx + half + Layout::GAP, cy, half, 300])
-        place(:activity, "LIVE BOT ACTIVITY", [cx, cy + 312, cw, ch - 312])
+        place(:log, "EVENT LOG", [cx, cy, cw, ch], right: "prompts · tools · errors")
+      when :machines
+        place(:health, "SYSTEM HEALTH · #{health_machine&.dig('host')}", [cx, cy, half, 300])
+        place(:machines, "MACHINES", [cx + half + Layout::GAP, cy, half, 300])
+        place(:live, "LIVE ACTIVITY", [cx, cy + 312, cw, ch - 312])
       when :settings
         place(:settings, "SETTINGS", [cx, cy, cw, ch])
       else
@@ -145,17 +156,21 @@ module BotOps
       end
     end
 
+    def fit(rect)
+      Layout.fit(rect, @width, @height)
+    end
+
     def draw_overview
-      place(:fleet,     "BOT FLEET",         Layout::FLEET, right: "#{@store.fleet_total} total")
-      place(:activity,  "LIVE BOT ACTIVITY", Layout::ACTIVITY)
-      place(:workflows, "WORKFLOWS",         Layout::WORKFLOWS, right: "● Active", right_color: TEAL)
-      place(:queue,     "TASK QUEUE",        Layout::QUEUE)
-      place(:pipeline,  "CURRENT PIPELINE",  Layout::PIPELINE)
-      place(:health,    "SYSTEM HEALTH",     Layout::HEALTH)
-      place(:recent,    "RECENT ACTIVITY",   Layout::RECENT)
-      place(:agent,     "AGENT DETAILS",     Layout::AGENT)
-      place(:logs,      "RECENT LOGS",       Layout::LOGS, right: "View All")
-      place(:reports,   "RECENT REPORTS",    Layout::REPORTS, right: "View All")
+      place(:sessions, "CLAUDE SESSIONS",  fit(Layout::FLEET), right: "#{@store.sessions.size} live")
+      place(:live,     "LIVE ACTIVITY",    fit(Layout::ACTIVITY))
+      place(:projects, "PROJECTS · 24H",   fit(Layout::WORKFLOWS), right: "#{@store.projects.size} active", right_color: TEAL)
+      place(:tools,    "TOOL CALLS", fit(Layout::QUEUE))
+      place(:usage,    "USAGE",            fit(Layout::PIPELINE))
+      place(:health,   "SYSTEM HEALTH · #{health_machine&.dig('host')}", fit(Layout::HEALTH))
+      place(:prompts,  "RECENT PROMPTS",   fit(Layout::RECENT))
+      place(:detail,   "SESSION DETAILS",  fit(Layout::AGENT))
+      place(:log,      "EVENT LOG",        fit(Layout::LOGS))
+      place(:machines, "MACHINES",         fit(Layout::REPORTS), right: "#{@store.online_machines.size} online")
     end
 
     # ---- interactions --------------------------------------------------
@@ -171,13 +186,13 @@ module BotOps
       @host.invalidate
     end
 
-    def set_queue_filter(key)
-      @store.queue_filter = key
+    def set_tool_filter(key)
+      @store.tool_filter = key
       @host.invalidate
     end
 
-    def select_bot(id)
-      @store.selected_bot_id = id
+    def select_session(id)
+      @store.selected_session_id = id
       @host.invalidate
     end
 
@@ -207,6 +222,6 @@ module BotOps
     def toggle_fullscreen; @actions << :toggle_fullscreen; end
     def quit; @actions << :quit; end
     def toolkit_name; "preview"; end
-    def channel_name; "SimulatedChannel"; end
+    def channel_name; "preview"; end
   end
 end

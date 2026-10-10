@@ -1,92 +1,56 @@
 # frozen_string_literal: true
 
 module BotOps
-  Bot      = Struct.new(:id, :name, :role, :status, :tasks, :uptime_s, :color, :glyph)
-  Activity = Struct.new(:bot_id, :task, :started_at, :progress, :status)
-  Workflow = Struct.new(:id, :name, :steps, :status, :done, :total, :color, :glyph)
-  Task     = Struct.new(:id, :title, :agent, :priority, :status, :created_at)
-  Event    = Struct.new(:bot_id, :message, :at)
-  LogLine  = Struct.new(:time, :level, :message)
-  Report   = Struct.new(:name, :at, :kind, :color)
-  Stat     = Struct.new(:label, :value, :delta, :delta_dir, :delta_color)
+  Stat = Struct.new(:label, :value, :note, :note_color)
 
-  # The single source of truth for everything the hub draws.
+  # The single source of truth for everything the dashboard draws.
   #
-  # The UI never mutates the store directly. Instead, comms channels (or the
-  # built-in simulator) produce event hashes which are fed to Store#apply.
-  # This keeps the door open for a real transport (socket, HTTP, stdin) later:
-  # anything that can produce `{ type: "...", ... }` hashes can drive the hub.
+  # The UI never mutates the data directly. Comms channels produce event
+  # hashes which are fed to Store#apply; the important one is
+  #
+  #   { type: "snapshot", snapshot: <Probe#snapshot>, local: true/false }
+  #
+  # which replaces everything known about one machine. Machines that stop
+  # reporting are marked offline after OFFLINE_AFTER_S and their sessions
+  # drop out of the live views (their history stays in the usage numbers).
   class Store
-    attr_reader :bots, :activity, :workflows, :tasks, :events, :logs, :reports,
-                :pipeline_stages, :series, :series_labels, :health, :stats,
-                :system_online, :quote, :agent_detail, :queue_counts, :fleet_total
-    attr_accessor :activity_tab, :queue_filter, :page, :selected_bot_id
+    OFFLINE_AFTER_S = 15
+    TOOL_GROUPS = {
+      edits: %w[Edit Write MultiEdit NotebookEdit],
+      shell: %w[Bash BashOutput KillShell Monitor]
+    }.freeze
+
+    attr_accessor :page, :activity_tab, :tool_filter, :selected_session_id
+    attr_reader :collector_status, :probe_error, :version
 
     def initialize
-      @listeners = []
-      @activity_tab = :live
-      @queue_filter = :all
+      @machines = {}
       @page = :overview
-      seed!
-    end
-
-    def on_change(&blk)
-      @listeners << blk
-    end
-
-    def bot(id)
-      @bots.find { |b| b.id == id }
-    end
-
-    def selected_bot
-      bot(@selected_bot_id) || @bots.first
-    end
-
-    def visible_activity
-      case @activity_tab
-      when :queue     then @activity.select { |a| a.status == "Pending" }
-      when :completed then @activity.select { |a| a.status == "Completed" }
-      when :errors    then @activity.select { |a| a.status == "Failed" }
-      else                 @activity.reject { |a| a.status == "Pending" }
-      end
-    end
-
-    def visible_tasks
-      case @queue_filter
-      when :pending then @tasks.select { |t| t.status == "Pending" }
-      when :running then @tasks.select { |t| t.status == "Running" }
-      when :failed  then @tasks.select { |t| t.status == "Failed" }
-      else               @tasks
-      end
+      @activity_tab = :all
+      @tool_filter = :all
+      @collector_status = "Starting…"
+      @probe_error = nil
+      @version = 0
+      @cache = {}
     end
 
     # ---- event ingestion -------------------------------------------------
 
     def apply(event)
       type = (event[:type] || event["type"]).to_s
-      ev = symbolize(event)
+      ev = event.each_with_object({}) { |(k, v), o| o[k.to_sym] = v }
       case type
-      when "progress"        then apply_progress(ev)
-      when "activity.add"    then @activity.unshift(Activity.new(ev[:bot_id], ev[:task], ev[:at] || Time.now, ev[:progress] || 0, ev[:status] || "Running"))
-      when "activity.status" then (a = @activity.find { |x| x.bot_id == ev[:bot_id] }) && (a.status = ev[:status])
-      when "bot.status"      then (b = bot(ev[:bot_id])) && (b.status = ev[:status]; b.tasks = ev[:tasks] if ev[:tasks])
-      when "task.status"     then (t = @tasks.find { |x| x.id == ev[:id] }) && (t.status = ev[:status])
-      when "task.add"        then @tasks.unshift(Task.new(ev[:id], ev[:title], ev[:agent], ev[:priority] || "Medium", ev[:status] || "Pending", ev[:at] || Time.now))
-      when "workflow"        then (w = @workflows.find { |x| x.id == ev[:id] }) && (w.done = ev[:done] if ev[:done]; w.status = ev[:status] if ev[:status])
-      when "log"             then push_log(ev[:level] || "INFO", ev[:message], ev[:at] || Time.now)
-      when "event"           then @events.unshift(Event.new(ev[:bot_id], ev[:message], ev[:at] || Time.now)); @events.pop while @events.size > 12
-      when "health"          then @health.merge!(ev.reject { |k, _| k == :type })
-      when "pipeline"        then @pipeline_stages.each { |s| s[:count] = ev[s[:key]] if ev[s[:key]] }
-      when "series.push"     then push_series_point(ev[:label], ev[:values])
-      when "stat"            then apply_stat(ev)
-      when "fleet.total"     then @fleet_total = ev[:total].to_i
-      when "system"          then @system_online = ev[:online] != false
-      when "agent.detail"    then @agent_detail.merge!(ev.reject { |k, _| k == :type })
-      when "tick"            then tick_clocks(ev[:seconds] || 1)
-      else
-        push_log("WARN", "Unknown event type: #{type}")
+      when "snapshot"
+        snap = ev[:snapshot]
+        return self unless snap.is_a?(Hash) && snap["host"].is_a?(String)
+        @machines[snap["host"]] = { "snapshot" => snap, "received_at" => ev[:at] || Time.now, "local" => ev[:local] ? true : false }
+        @probe_error = nil if ev[:local]
+      when "collector" then @collector_status = ev[:status].to_s
+      when "probe.error" then @probe_error = ev[:message].to_s
+      else return self
       end
-      changed!
+      @version += 1
+      @cache = {}
       self
     end
 
@@ -94,188 +58,202 @@ module BotOps
       Array(events).each { |e| apply(e) }
     end
 
-    def changed!
-      @listeners.each { |l| l.call(self) }
+    # ---- machines ----------------------------------------------------------
+
+    def machines(now = Time.now)
+      cached(:machines) do
+        @machines.map do |host, m|
+          snap = m["snapshot"]
+          {
+            "host" => host,
+            "local" => m["local"],
+            "online" => now - m["received_at"] < OFFLINE_AFTER_S,
+            "seen_at" => m["received_at"],
+            "health" => snap["machine"] || {},
+            "sessions" => Array(snap["sessions"]).size
+          }
+        end.sort_by { |m| [m["local"] ? 0 : 1, m["host"]] }
+      end
+    end
+
+    def online_machines(now = Time.now)
+      machines(now).select { |m| m["online"] }
+    end
+
+    def local_machine
+      machines.find { |m| m["local"] }
+    end
+
+    # ---- sessions ----------------------------------------------------------
+
+    # Live sessions on every online machine: busy first, then most recent.
+    def sessions(now = Time.now)
+      cached(:sessions) do
+        online = online_machines(now).map { |m| m["host"] }
+        list = online.flat_map do |host|
+          Array(@machines[host]["snapshot"]["sessions"]).map { |s| s.merge("host" => host) }
+        end
+        list.sort_by { |s| [s["attention"] ? 0 : (s["status"] == "busy" ? 1 : 2), -(s["last_at"] || s["status_at"]).to_f] }
+      end
+    end
+
+    def session(id)
+      sessions.find { |s| s["id"] == id }
+    end
+
+    def selected_session
+      session(@selected_session_id) || sessions.first
+    end
+
+    def visible_sessions
+      case @activity_tab
+      when :busy then sessions.select { |s| s["status"] == "busy" }
+      when :idle then sessions.reject { |s| s["status"] == "busy" }
+      else sessions
+      end
+    end
+
+    def busy_count
+      sessions.count { |s| s["status"] == "busy" }
+    end
+
+    # Sessions blocked on a permission prompt (needs bin/bot-ops-hook).
+    def attention_count
+      sessions.count { |s| s["attention"] }
+    end
+
+    def hooks_installed?
+      @machines.values.any? { |m| m["snapshot"]["hooks"] }
+    end
+
+    # ---- events ------------------------------------------------------------
+
+    # Prompts, tool calls and tool errors from every machine, newest first.
+    def events
+      cached(:events) do
+        names = {}
+        sessions.each { |s| names[s["id"]] = s["name"] }
+        @machines.flat_map do |host, m|
+          Array(m["snapshot"]["events"]).map do |e|
+            e.merge("host" => host, "session" => names[e["sid"]] || e["project"] || e["sid"].to_s[0, 8])
+          end
+        end.sort_by { |e| -e["at"].to_f }
+      end
+    end
+
+    def prompts
+      events.select { |e| e["kind"] == "prompt" }
+    end
+
+    def tool_events
+      events.select { |e| e["kind"] == "tool" || e["kind"] == "error" }
+    end
+
+    def visible_tools
+      case @tool_filter
+      when :errors then tool_events.select { |e| e["kind"] == "error" }
+      when :edits, :shell then tool_events.select { |e| TOOL_GROUPS[@tool_filter].include?(e["title"]) }
+      else tool_events
+      end
+    end
+
+    def tool_counts
+      cached(:tool_counts) do
+        t = tool_events
+        { all: t.size, edits: t.count { |e| TOOL_GROUPS[:edits].include?(e["title"]) },
+          shell: t.count { |e| TOOL_GROUPS[:shell].include?(e["title"]) }, errors: t.count { |e| e["kind"] == "error" } }
+      end
+    end
+
+    # ---- usage -------------------------------------------------------------
+
+    # Last +hours+ hourly buckets summed over all machines:
+    # [[hour_epoch, out_tokens, tool_calls, prompts, errors], ...] oldest first.
+    def hourly(hours = 24)
+      cached([:hourly, hours]) do
+        sums = Hash.new { |h, k| h[k] = [0, 0, 0, 0] }
+        @machines.each_value do |m|
+          Array(m["snapshot"]["hourly"]).each do |hour, *vals|
+            vals.each_with_index { |v, i| sums[hour][i] += v.to_i }
+          end
+        end
+        last = sums.keys.max || (Time.now.to_i / 3600) * 3600
+        (0...hours).map { |i| h = last - (hours - 1 - i) * 3600; [h, *sums[h]] }
+      end
+    end
+
+    def totals
+      cached(:totals) do
+        rows = hourly(24)
+        { out_tokens: rows.sum { |r| r[1] }, tool_calls: rows.sum { |r| r[2] },
+          prompts: rows.sum { |r| r[3] }, errors: rows.sum { |r| r[4] } }
+      end
+    end
+
+    # Projects with activity in the last 24h on any machine, most recent first.
+    def projects
+      cached(:projects) do
+        @machines.flat_map do |host, m|
+          Array(m["snapshot"]["projects"]).map { |p| p.merge("host" => host) }
+        end.sort_by { |p| -p["last_at"].to_f }
+      end
+    end
+
+    def stats
+      t = totals
+      online = online_machines.size
+      [
+        Stat.new("LIVE SESSIONS",   sessions.size.to_s, "on #{online} machine#{'s' unless online == 1}", Theme::MUTED),
+        if attention_count.positive?
+          Stat.new("BUSY NOW", busy_count.to_s, "#{attention_count} need you", Theme::YELLOW)
+        else
+          Stat.new("BUSY NOW", busy_count.to_s, "#{sessions.size - busy_count} idle", Theme::MUTED)
+        end,
+        Stat.new("PROMPTS (24H)",   Store.count(t[:prompts]), "#{projects.size} projects", Theme::MUTED),
+        Stat.new("TOOL CALLS (24H)", Store.count(t[:tool_calls]), "#{t[:errors]} errors", t[:errors].positive? ? Theme::RED : Theme::MUTED),
+        Stat.new("OUTPUT TOKENS",   Store.count(t[:out_tokens]), "24h", Theme::MUTED)
+      ]
     end
 
     # ---- formatting helpers ---------------------------------------------
 
     def self.ago(time, now = Time.now)
-      secs = (now - time).to_i
+      return "—" unless time
+      secs = (now.to_f - time.to_f).to_i
       return "just now" if secs < 60
       mins = secs / 60
       return "#{mins}m ago" if mins < 60
-      "#{mins / 60}h #{mins % 60}m ago"
+      return "#{mins / 60}h #{mins % 60}m ago" if mins < 24 * 60
+      "#{mins / 1440}d ago"
     end
 
     def self.duration(secs)
+      return "—" unless secs
       m = (secs / 60).to_i
-      m < 60 ? "#{m}m" : format("%dh %02dm", m / 60, m % 60)
+      return "#{m}m" if m < 60
+      return format("%dh %02dm", m / 60, m % 60) if m < 24 * 60
+      format("%dd %dh", m / 1440, (m % 1440) / 60)
+    end
+
+    # 950, 12.4k, 3.1M
+    def self.count(n)
+      n = n.to_i
+      return n.to_s if n < 1000
+      return format("%.1fk", n / 1000.0).sub(".0k", "k") if n < 1_000_000
+      format("%.1fM", n / 1_000_000.0).sub(".0M", "M")
+    end
+
+    # "claude-opus-5-5" -> "Opus 5.5"
+    def self.model_name(id)
+      m = id.to_s.match(/claude-(\w+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?\z/)
+      return id.to_s if m.nil?
+      [m[1].capitalize, [m[2], m[3]].compact.join(".")].join(" ")
     end
 
     private
 
-    def symbolize(h)
-      h.each_with_object({}) { |(k, v), o| o[k.to_sym] = v }
-    end
-
-    def apply_progress(ev)
-      a = @activity.find { |x| x.bot_id == ev[:bot_id] }
-      return unless a
-      a.progress = [[ev[:progress].to_i, 0].max, 100].min
-      a.status = "Completed" if a.progress >= 100 && a.status == "Running"
-    end
-
-    def apply_stat(ev)
-      s = @stats.find { |x| x.label == ev[:label] }
-      return unless s
-      s.value = ev[:value] if ev[:value]
-      s.delta = ev[:delta] if ev[:delta]
-      s.delta_dir = ev[:delta_dir] if ev[:delta_dir]
-      s.delta_color = ev[:delta_color] if ev[:delta_color]
-    end
-
-    def push_log(level, message, at = Time.now)
-      @logs.unshift(LogLine.new(at, level, message))
-      @logs.pop while @logs.size > 40
-    end
-
-    def push_series_point(label, values)
-      @series_labels << label
-      @series.each { |s| s[:values] << (values[s[:key]] || s[:values].last || 0) }
-      max = 7
-      if @series_labels.size > max
-        @series_labels.shift
-        @series.each { |s| s[:values].shift }
-      end
-    end
-
-    def tick_clocks(seconds)
-      @bots.each { |b| b.uptime_s += seconds if b.status == "Running" }
-      @health[:uptime_s] += seconds
-    end
-
-    # ---- seed data (mirrors the reference mock-up) ----------------------
-
-    def seed!
-      now = Time.now
-      t = Theme
-      @system_online = true
-      @quote = "\"Small, consistent improvements compound into extraordinary results.\""
-
-      @stats = [
-        Stat.new("TOTAL BOTS",      "48",    "2",   :up,   t::TEAL),
-        Stat.new("ACTIVE",          "42",    "3",   :up,   t::TEAL),
-        Stat.new("RUNNING TASKS",   "312",   "18",  :up,   t::TEAL),
-        Stat.new("COMPLETED (24H)", "1,482", "22%", :up,   t::TEAL),
-        Stat.new("FAILED (24H)",    "7",     "67%", :down, t::RED)
-      ]
-
-      @bots = [
-        Bot.new(:content,    "Content Creator",  "Video / Social",      "Running", 12, 2 * 3600 + 14 * 60, t::CYAN,   "▶"),
-        Bot.new(:research,   "Research Agent",   "Research / Analysis", "Running", 8,  1 * 3600 + 3 * 60,  t::YELLOW, "⌕"),
-        Bot.new(:support,    "Customer Support", "Support / CRM",       "Running", 5,  46 * 60,            t::TEAL,   "☺"),
-        Bot.new(:marketing,  "Marketing Agent",  "Marketing / Growth",  "Running", 9,  2 * 3600 + 37 * 60, t::BLUE,   "⚑"),
-        Bot.new(:sales,      "Sales Agent",      "Outreach / CRM",      "Running", 6,  1 * 3600 + 22 * 60, t::PURPLE, "✉"),
-        Bot.new(:data,       "Data Analyst",     "Data / Insights",     "Running", 4,  1 * 3600 + 11 * 60, t::PINK,   "∴"),
-        Bot.new(:automation, "Automation Agent", "Ops / Integrations",  "Running", 7,  3 * 3600 + 5 * 60,  t::GREEN,  "⚙"),
-        Bot.new(:devops,     "DevOps Agent",     "Infra / Monitoring",  "Idle",    0,  12 * 60,            t::CYAN,   "☁")
-      ]
-      @selected_bot_id = :content
-      @fleet_total = 48
-
-      @activity = [
-        Activity.new(:content,    "Generating video clips for TikTok", now - 2 * 60, 78,  "Running"),
-        Activity.new(:research,   "Analyzing market trends",           now - 3 * 60, 52,  "Running"),
-        Activity.new(:sales,      "Sending outreach emails",           now - 4 * 60, 34,  "Running"),
-        Activity.new(:support,    "Processing support tickets",        now - 5 * 60, 61,  "Running"),
-        Activity.new(:marketing,  "Creating ad variations",            now - 6 * 60, 43,  "Running"),
-        Activity.new(:data,       "Updating dashboard metrics",        now - 7 * 60, 89,  "Running"),
-        Activity.new(:automation, "Processing scheduled workflow",     now - 8 * 60, 100, "Completed"),
-        Activity.new(:devops,     "Deploying to production",           now - 9 * 60, 25,  "Running"),
-        Activity.new(:research,   "Summarizing competitor pricing",    now - 12 * 60, 0,  "Pending"),
-        Activity.new(:sales,      "Refreshing lead list",              now - 15 * 60, 0,  "Pending"),
-        Activity.new(:devops,     "Rotating API credentials",          now - 40 * 60, 60, "Failed")
-      ]
-
-      @workflows = [
-        Workflow.new(:youtube,  "YouTube Video Pipeline", ["Content Creator", "Editor", "Publisher"], "Running", 3, 5, t::CYAN,   "▶"),
-        Workflow.new(:blog,     "Blog Post Automation",   ["Research", "Write", "Publish"],           "Running", 2, 4, t::TEAL,   "✎"),
-        Workflow.new(:support,  "Customer Support Flow",  ["Ticket", "Analyze", "Respond"],           "Running", 5, 7, t::YELLOW, "✉"),
-        Workflow.new(:sales,    "Sales Outreach",         ["Find Leads", "Personalize", "Send"],      "Running", 4, 6, t::BLUE,   "⌖"),
-        Workflow.new(:social,   "Social Media Scheduler", ["Create", "Approve", "Post"],              "Running", 2, 3, t::GREEN,  "☼"),
-        Workflow.new(:dataproc, "Data Processing",        ["Ingest", "Transform", "Store"],           "Running", 1, 4, t::PURPLE, "☰")
-      ]
-
-      @tasks = [
-        Task.new(7843, "Generate video clips",   "Content Creator", "High",   "Running", now - 2 * 60),
-        Task.new(7842, "Research keywords",      "Research Agent",  "High",   "Running", now - 4 * 60),
-        Task.new(7841, "Send outreach emails",   "Sales Agent",     "Medium", "Running", now - 7 * 60),
-        Task.new(7840, "Analyze performance",    "Data Analyst",    "Medium", "Running", now - 11 * 60),
-        Task.new(7839, "Process support ticket", "Support Agent",   "Medium", "Pending", now - 14 * 60),
-        Task.new(7838, "Create ad variations",   "Marketing Agent", "Medium", "Pending", now - 18 * 60),
-        Task.new(7837, "Update dashboard",       "Data Analyst",    "Low",    "Pending", now - 22 * 60),
-        Task.new(7836, "Deploy to production",   "DevOps Agent",    "High",   "Pending", now - 27 * 60),
-        Task.new(7835, "Transcribe webinar",     "Content Creator", "Low",    "Pending", now - 31 * 60),
-        Task.new(7834, "Sync CRM contacts",      "Sales Agent",     "Medium", "Failed",  now - 38 * 60),
-        Task.new(7833, "Rebuild search index",   "Data Analyst",    "High",   "Failed",  now - 44 * 60)
-      ]
-      @queue_counts = { all: 24, pending: 12, running: 8, failed: 4 }
-
-      @pipeline_stages = [
-        { key: :input,      name: "Input",      count: 48, glyph: "⬇" },
-        { key: :processing, name: "Processing", count: 32, glyph: "⚙" },
-        { key: :review,     name: "Review",     count: 16, glyph: "⚑" },
-        { key: :output,     name: "Output",     count: 12, glyph: "⬆" }
-      ]
-
-      @series_labels = %w[12:00 13:00 14:00 15:00 16:00 17:00 18:00]
-      @series = [
-        { key: :created,    name: "Created",    color: t::TEAL,   values: [30, 32, 40, 45, 47, 50, 58] },
-        { key: :processing, name: "Processing", color: t::BLUE,   values: [20, 23, 32, 30, 36, 40, 44] },
-        { key: :completed,  name: "Completed",  color: t::PURPLE, values: [10, 14, 18, 15, 22, 26, 30] },
-        { key: :failed,     name: "Failed",     color: t::RED,    values: [8, 9, 9, 7, 8, 7, 11] }
-      ]
-
-      @health = {
-        cpu: 28, memory: 54, network: 12, storage: 42,
-        uptime_s: 12 * 86_400 + 6 * 3600, response_ms: 482, error_rate: 0.6
-      }
-
-      @events = [
-        Event.new(:content,   "Completed video clip upload (15 clips)", now - 2 * 60),
-        Event.new(:research,  "Finished market analysis report",        now - 4 * 60),
-        Event.new(:sales,     "Sent 27 outreach emails",                now - 6 * 60),
-        Event.new(:support,   "Resolved 12 tickets",                    now - 8 * 60),
-        Event.new(:marketing, "Published 3 posts",                      now - 11 * 60),
-        Event.new(:devops,    "Deployed to production",                 now - 16 * 60)
-      ]
-
-      @agent_detail = {
-        bot_id: :content, task: "Generate 15 video clips", progress: 73,
-        started_at: now - 2 * 60, model: "Claude Sonnet 5.5",
-        capabilities: ["Video generation", "Image generation", "Script writing", "Social media optimization"]
-      }
-
-      @logs = [
-        LogLine.new(now - 0 * 60,  "INFO", "Generated video clip #12/15"),
-        LogLine.new(now - 2 * 60,  "INFO", "Downloaded media assets"),
-        LogLine.new(now - 6 * 60,  "INFO", "Processing with ffmpeg (AV1)"),
-        LogLine.new(now - 9 * 60,  "INFO", "Uploaded to YouTube (part)"),
-        LogLine.new(now - 13 * 60, "INFO", "Completed analysis (keyword: faith)"),
-        LogLine.new(now - 16 * 60, "WARN", "Rate limit approaching (API)"),
-        LogLine.new(now - 18 * 60, "INFO", "Retrying request (3/3)"),
-        LogLine.new(now - 20 * 60, "INFO", "Task completed successfully")
-      ]
-
-      day = Time.new(now.year, now.month, now.day)
-      @reports = [
-        Report.new("Daily Bot Performance",  day + 18 * 3600,       "PDF", t::RED),
-        Report.new("Content Growth Report",  day + 12 * 3600,       "XLS", t::TEAL),
-        Report.new("Sales Pipeline Report",  day + 9 * 3600,        "XLS", t::BLUE),
-        Report.new("System Health Report",   day + 6 * 3600,        "SYS", t::PURPLE),
-        Report.new("Marketing Performance",  day - 6 * 3600,        "XLS", t::YELLOW)
-      ]
+    def cached(key)
+      @cache.fetch(key) { @cache[key] = yield }
     end
   end
 end

@@ -1,11 +1,14 @@
 # Bot Ops Blue
 
-A borderless desktop operations dashboard for a fleet of bots. Ruby owns the
-data, layout and comms; a small Rust extension owns the window and rendering.
-It reproduces the reference mock-up in `assets/reference-mockup.png`: bot
-fleet, live activity, workflows, task queue, pipeline chart, system health
-gauges, recent activity, agent details, logs and reports, plus a sidebar that
-switches between full-size pages for each area.
+A borderless desktop dashboard for your **live Claude Code sessions**, on
+this machine and on any other machine that runs the small reporting agent.
+Ruby owns the data, layout and comms; a small Rust extension owns the window
+and rendering. The look follows the mock-up in `assets/reference-mockup.png`:
+live sessions, live activity, projects, tool calls, hourly usage, machine
+health, recent prompts, session details, an event log and a machine list,
+plus a sidebar that switches between full-size pages for each area.
+
+Nothing on screen is simulated. Panels with no data show an empty state.
 
 ![Bot Ops Blue running](assets/preview.png)
 
@@ -32,17 +35,102 @@ Other tasks:
 | `rake compile` | Rebuilds just the native extension |
 | `rake clean` | Removes build artifacts |
 
+### Which monitor
+
+On macOS the window opens centered on your external monitor. If no external
+monitor is connected it refuses to start rather than cover the main screen.
+To choose a different spot, set an environment variable:
+
+| Variable | Effect |
+| --- | --- |
+| `BOT_OPS_DISPLAY=external` | First non-main monitor (default); exits if there is none |
+| `BOT_OPS_DISPLAY=main` | Leave placement to the OS (main monitor) |
+| `BOT_OPS_DISPLAY=2` | Monitor number 2, in macOS's screen order |
+| `BOT_OPS_POSITION=x,y` | Exact top-left corner in screen points (any OS) |
+
+```sh
+BOT_OPS_DISPLAY=main bundle exec rake run
+```
+
+`BOT_OPS_FULLSCREEN=1` starts fullscreen on that monitor.
+
 The window opens without an OS title bar. Drag the header bar to move it.
 The three glyphs in the top-right corner restore the title bar, toggle
 fullscreen, and quit. The same controls live on the **Settings** page.
+In fullscreen macOS slides its menu bar over the top edge, so use the keys:
+**Esc** leaves fullscreen, **F11** or **Ctrl+Cmd+F** toggles it.
+
+The layout stretches to the window: the content is zoomed until the
+1536x1024 design fits, and the panels widen or grow taller to use the rest,
+so a 16:9 monitor is filled edge to edge without black bars.
+
+## Where the data comes from
+
+`BotOps::Probe` reads Claude Code's own files on the machine it runs on.
+It sends nothing anywhere and changes no settings:
+
+| Source | Gives |
+| --- | --- |
+| `~/.claude/sessions/<pid>.json` (pid checked alive) | live sessions: name, cwd, status (busy/idle), entrypoint, version |
+| `~/.claude/projects/*/<session>.jsonl` (+ `subagents/`) | model, tokens, context size, tool calls and errors, prompts, title, git branch |
+| `sysctl`, `vm_stat`, `df` (macOS) or `/proc` (Linux) | load, memory, disk, uptime |
+
+Transcripts are tailed: the first scan reads the last 24 hours, then each
+two-second refresh reads only the lines appended since. These files are
+Claude Code internals, not a published API, so every field is read
+defensively and a format change shows up as missing data, never as wrong
+data. `claude agents --json` lists the same live sessions if you want to
+cross-check.
+
+### Hooks (optional)
+
+`bin/bot-ops-hook` is a Claude Code command hook that appends
+SessionStart, SessionEnd, Notification and Stop events to
+`~/.claude/bot-ops/hooks.jsonl`. With it registered, a session blocked on a
+permission prompt shows **Needs you** (yellow, sorted first) within two
+seconds, and starts, ends and finished turns appear in the event log. It
+prints nothing, always exits 0 and caps its log at 2 MB. Register it yourself
+for those four events (for example with `/hooks`) as
+`ruby /path/to/bot-ops-blue/bin/bot-ops-hook`; the Settings page shows
+whether events are arriving.
+
+### Adding your other machines
+
+The dashboard can accept snapshots from other machines. On the machine
+showing the dashboard:
+
+```sh
+BOT_OPS_LISTEN=0.0.0.0:47800 BOT_OPS_TOKEN=<16+ random chars> bundle exec rake run
+```
+
+On each other machine (Ruby 3.0+ and a checkout of this repo, no gems):
+
+```sh
+BOT_OPS_COLLECTOR=http://<dashboard-host>:47800 BOT_OPS_TOKEN=<same token> bin/bot-ops-agent
+```
+
+The agent posts a snapshot every 3 seconds (`BOT_OPS_INTERVAL`). A machine
+that stops reporting turns offline after 15 seconds and its sessions leave
+the live views. Snapshots carry prompt excerpts and tool details over plain
+HTTP, guarded only by the token, so keep the port on a network you trust
+(LAN, Tailscale, or an SSH tunnel), not the open internet.
+
+### Cloud sessions
+
+Claude Code has no documented way to list claude.ai/code cloud sessions or
+routines from outside the web UI, so they do not appear here.
 
 ## How it is put together
 
 ```
 bot_ops_blue.rb             entry point
+bin/bot-ops-agent           reports another machine to the dashboard
 lib/bot_ops/
   store.rb                  all dashboard state + Store#apply(event)
-  comms.rb                  Channel interface, Multiplexer, SimulatedChannel
+  probe.rb                  reads this machine's Claude Code sessions + health
+  collector.rb              HTTP endpoint for other machines' snapshots
+  comms.rb                  Channel interface, Multiplexer, ClaudeChannel
+  display.rb                picks the monitor the window opens on
   scene.rb                  builds a frame from the Store; handles clicks
   panels.rb, widgets.rb     drawing of each panel, on top of Canvas
   canvas.rb                 toolkit-independent display list (+ JSON, + SVG)
@@ -65,7 +153,7 @@ closes. While it runs, Rust calls two methods on `host`:
 | Call | Returns |
 | --- | --- |
 | `host.poll` | JSON frame (`cmds`, `hits`, `drag`) when something changed, else `""` |
-| `host.hit(id)` | A window command for hit region `id`: `"quit"`, `"fullscreen:on/off"`, `"decorations:on/off"`, or `""` |
+| `host.hit(id)` | A window command for hit region `id`: `"quit"`, `"fullscreen:toggle"`, `"decorations:toggle"`, or `""` |
 
 Rust handles the drag region (the header) natively, draws the frame, and
 executes the window commands. Everything else, including the two-second
@@ -105,7 +193,7 @@ end
 Then boot the hub with it in `bot_ops_blue.rb`:
 
 ```ruby
-channel = BotOps::Comms::Multiplexer.new(SocketChannel.new, BotOps::Comms::SimulatedChannel.new)
+channel = BotOps::Comms::Multiplexer.new(SocketChannel.new, BotOps::Comms::ClaudeChannel.new)
 BotOps::NativeHost.new(channel: channel).launch
 ```
 
@@ -113,21 +201,9 @@ Supported event types (see `Store#apply`):
 
 | `type` | Fields |
 | --- | --- |
-| `progress` | `bot_id`, `progress` (0-100) |
-| `activity.add` / `activity.status` | `bot_id`, `task`, `progress`, `status` |
-| `bot.status` | `bot_id`, `status`, `tasks` |
-| `task.add` / `task.status` | `id`, `title`, `agent`, `priority`, `status` |
-| `workflow` | `id`, `done`, `status` |
-| `log` | `level` (INFO/WARN/ERROR), `message` |
-| `event` | `bot_id`, `message` |
-| `health` | `cpu`, `memory`, `network`, `storage`, `response_ms`, `error_rate` |
-| `pipeline` | `input`, `processing`, `review`, `output` |
-| `series.push` | `label`, `values` (`created`, `processing`, `completed`, `failed`) |
-| `stat` | `label`, `value`, `delta`, `delta_dir`, `delta_color` |
-| `agent.detail` | `bot_id`, `task`, `progress`, `started_at`, `model`, `capabilities` |
-| `system` | `online` |
-| `fleet.total` | `total` |
-| `tick` | `seconds` |
+| `snapshot` | `snapshot` (a `Probe#snapshot` hash), `local` (true for this machine) |
+| `collector` | `status` (text shown in the header and on Settings) |
+| `probe.error` | `message` |
 
 ## Platform notes
 

@@ -9,8 +9,8 @@
 #
 # The window has no OS title bar: drag the header to move it, use the three
 # glyphs in the top-right corner to restore the title bar, go fullscreen, or
-# quit. Live data currently comes from BotOps::Comms::SimulatedChannel; see
-# lib/bot_ops/comms.rb for how to plug in a real transport.
+# quit. Data is live: BotOps::Probe reads this machine's Claude Code sessions,
+# and bin/bot-ops-agent reports other machines to the collector (see README).
 
 APP_ROOT = File.expand_path(File.dirname(__FILE__)) unless defined?(APP_ROOT)
 lib = File.join(APP_ROOT, "lib")

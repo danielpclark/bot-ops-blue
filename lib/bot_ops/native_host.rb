@@ -13,12 +13,10 @@ module BotOps
 
     def initialize(store: nil, channel: nil)
       @store = store || Store.new
-      @channel = channel || Comms::SimulatedChannel.new
+      @channel = channel || Comms::ClaudeChannel.new
       @scene = Scene.new(@store, self)
       @canvas = nil
       @dirty = true
-      @decorated = false
-      @fullscreen = false
       @pending = nil
       @last_tick = Time.now
     end
@@ -33,7 +31,11 @@ module BotOps
       end
       require NATIVE_LIB
       @channel.start(@store)
-      Native.run(self, Layout::WIDTH, Layout::HEIGHT, "Bot Ops Blue")
+      position = Display.position(Layout::WIDTH, Layout::HEIGHT)
+      if position.nil?
+        abort "No external monitor detected. Connect one, or run with BOT_OPS_DISPLAY=main to use the main screen."
+      end
+      Native.run(self, Layout::WIDTH, Layout::HEIGHT, "Bot Ops Blue", position)
       @channel.stop
     end
 
@@ -50,7 +52,14 @@ module BotOps
       return "" unless @dirty
       @dirty = false
       @canvas = @scene.build
-      @canvas.to_json(drag: [0, 0, Layout::WIDTH, Layout::HEADER_H])
+      @canvas.to_json(drag: [0, 0, @scene.width, Layout::HEADER_H])
+    end
+
+    # The window's size in points changed (fullscreen, resize); lay out again.
+    def resize(width, height)
+      return if [width, height] == [@scene.width, @scene.height]
+      @scene.resize(width, height)
+      @dirty = true
     end
 
     # Runs the handler of hit region +id+; returns a window command or "".
@@ -68,14 +77,13 @@ module BotOps
       @dirty = true
     end
 
+    # The native side owns window state and toggles against it.
     def toggle_decorations
-      @decorated = !@decorated
-      @pending = "decorations:#{@decorated ? 'on' : 'off'}"
+      @pending = "decorations:toggle"
     end
 
     def toggle_fullscreen
-      @fullscreen = !@fullscreen
-      @pending = "fullscreen:#{@fullscreen ? 'on' : 'off'}"
+      @pending = "fullscreen:toggle"
     end
 
     def quit

@@ -61,9 +61,8 @@ task :preview do
   FileUtils.mkdir_p(out)
   host = BotOps::PreviewHost.new
   store = BotOps::Store.new
-  channel = BotOps::Comms::SimulatedChannel.new
   scene = BotOps::Scene.new(store, host)
-  20.times { store.apply_all(channel.poll(store)) }
+  store.apply(type: "snapshot", snapshot: BotOps::Probe.new.snapshot, local: true)
   BotOps::Layout::NAV.each do |key, _name, _glyph|
     store.page = key
     File.write(File.join(out, "#{key}.svg"), scene.build.to_svg)

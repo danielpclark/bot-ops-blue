@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
 module BotOps
-  # Pixel geometry of the dashboard. Everything is absolutely positioned so the
-  # borderless window renders identically on every platform Shoes runs on.
+  # Pixel geometry of the dashboard, laid out for the minimum (design) size
+  # WIDTH x HEIGHT. A larger window stretches the content area: Layout.fit maps
+  # a design rect onto the actual size so panels grow to fill it.
   module Layout
     WIDTH  = 1536
     HEIGHT = 1024
@@ -40,14 +41,36 @@ module BotOps
 
     PANEL_TITLE_H = 36
 
+    def self.content_w(width)
+      width - CONTENT_X - 20
+    end
+
+    def self.content_h(height)
+      height - CONTENT_Y - 14
+    end
+
+    # Maps a design rect [x, y, w, h] inside the content area onto a window of
+    # +width+ x +height+. Edges are mapped, not sizes, so neighbouring panels
+    # keep sharing the same gap and the outer ones stay flush with the edges.
+    def self.fit(rect, width, height)
+      x, y, w, h = rect
+      kx = content_w(width).to_f / CONTENT_W
+      ky = content_h(height).to_f / CONTENT_H
+      left   = CONTENT_X + ((x - CONTENT_X) * kx).round
+      right  = CONTENT_X + ((x + w - CONTENT_X) * kx).round
+      top    = CONTENT_Y + ((y - CONTENT_Y) * ky).round
+      bottom = CONTENT_Y + ((y + h - CONTENT_Y) * ky).round
+      [left, top, right - left, bottom - top]
+    end
+
     NAV = [
       [:overview,  "Overview",  "⌂"],
-      [:bots,      "Bots",      "◉"],
-      [:workflows, "Workflows", "⬡"],
-      [:queue,     "Queue",     "☰"],
-      [:data,      "Data",      "▤"],
+      [:sessions,  "Sessions",  "◉"],
+      [:projects,  "Projects",  "⬡"],
+      [:tools,     "Tools",     "☰"],
+      [:usage,     "Usage",     "▤"],
       [:logs,      "Logs",      "≡"],
-      [:analytics, "Analytics", "⌁"],
+      [:machines,  "Machines",  "⌁"],
       [:settings,  "Settings",  "⚙"]
     ].freeze
   end

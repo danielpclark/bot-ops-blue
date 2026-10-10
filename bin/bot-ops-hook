@@ -1,0 +1,31 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Bot Ops Blue hook: appends one line per Claude Code hook event to
+# ~/.claude/bot-ops/hooks.jsonl, which BotOps::Probe tails. Register it as a
+# command hook for SessionStart, SessionEnd, Notification and Stop (see the
+# README's Hooks section); without it the dashboard still works from transcripts.
+#
+# It must never get in a session's way: it prints nothing (stdout from some
+# hooks is fed back to Claude), always exits 0, and only uses the stdlib.
+
+require "json"
+require "fileutils"
+
+begin
+  payload = JSON.parse($stdin.read)
+  if payload.is_a?(Hash) && payload["session_id"]
+    keep = %w[session_id hook_event_name cwd message notification_type source reason]
+    line = payload.slice(*keep).merge("at" => Time.now.to_f)
+    dir = File.join(Dir.home, ".claude", "bot-ops")
+    FileUtils.mkdir_p(dir)
+    path = File.join(dir, "hooks.jsonl")
+    # Keep the log small: past 2 MB start over (the probe notices the shrink).
+    File.truncate(path, 0) if File.exist?(path) && File.size(path) > 2 * 1024 * 1024
+    File.open(path, "a") { |f| f.flock(File::LOCK_EX); f.puts(JSON.generate(line)) }
+  end
+rescue StandardError
+  nil
+end
+
+exit 0

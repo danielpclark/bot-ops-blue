@@ -66,89 +66,59 @@ module BotOps
       end
     end
 
-    # A deterministic-ish simulator so the hub looks alive before any real
-    # transport exists. It reads the store to decide what to nudge next.
-    class SimulatedChannel < Channel
-      LOG_POOL = [
-        ["INFO", "Generated video clip #%d/15"],
-        ["INFO", "Fetched 42 new leads from CRM"],
-        ["INFO", "Scheduled post for 19:00"],
-        ["WARN", "Retrying webhook delivery (2/3)"],
-        ["INFO", "Cache warmed for dashboard metrics"],
-        ["INFO", "Resolved ticket #%d"],
-        ["WARN", "Rate limit approaching (API)"],
-        ["INFO", "Transcoded media with ffmpeg (AV1)"],
-        ["ERROR", "Upload failed: token expired (auto-renewing)"],
-        ["INFO", "Health check passed (482ms)"]
-      ].freeze
+    # Live Claude Code activity. Probes this machine every POLL_S seconds on a
+    # background thread, and, when BOT_OPS_LISTEN is set, also accepts
+    # snapshots from bin/bot-ops-agent on other machines. Each snapshot becomes
+    # one { type: "snapshot" } event for Store#apply.
+    class ClaudeChannel < Channel
+      POLL_S = 2
 
-      def initialize(seed = 42)
+      attr_reader :collector, :collector_error
+
+      def initialize(probe: Probe.new, listen: ENV["BOT_OPS_LISTEN"], token: ENV["BOT_OPS_TOKEN"])
         super()
-        @rng = Random.new(seed)
-        @ticks = 0
+        @probe = probe
+        @listen = listen
+        @token = token
       end
 
-      def poll(store)
-        @ticks += 1
-        events = [{ type: "tick", seconds: 2 }]
-
-        store.activity.each do |a|
-          next unless a.status == "Running"
-          step = @rng.rand(0..4)
-          events << { type: "progress", bot_id: a.bot_id, progress: a.progress + step }
+      def start(_store)
+        start_collector if @listen && !@listen.empty?
+        push(type: "collector", status: collector_status)
+        @thread = Thread.new do
+          loop do
+            begin
+              push(type: "snapshot", snapshot: @probe.snapshot, local: true)
+            rescue StandardError => e
+              push(type: "probe.error", message: "#{e.class}: #{e.message}")
+            end
+            sleep POLL_S
+          end
         end
+      end
 
-        if (@ticks % 3).zero?
-          level, tmpl = LOG_POOL[@rng.rand(LOG_POOL.size)]
-          events << { type: "log", level: level, message: format(tmpl, @rng.rand(1..9999)) }
-        end
+      def stop
+        @thread&.kill
+        @collector&.stop
+      end
 
-        if (@ticks % 2).zero?
-          h = store.health
-          events << {
-            type: "health",
-            cpu: clamp(h[:cpu] + @rng.rand(-4..4), 5, 95),
-            memory: clamp(h[:memory] + @rng.rand(-2..2), 10, 95),
-            network: clamp(h[:network] + @rng.rand(-3..5), 1, 90),
-            storage: h[:storage],
-            response_ms: clamp(h[:response_ms] + @rng.rand(-30..30), 120, 900)
-          }
-        end
+      def name
+        "Claude Code (local probe#{@collector ? ' + collector' : ''})"
+      end
 
-        if (@ticks % 15).zero?
-          last = store.series.map { |s| [s[:key], (s[:values].last + @rng.rand(-5..6)).clamp(0, 60)] }.to_h
-          hh, mm = store.series_labels.last.split(":").map(&:to_i)
-          label = format("%02d:%02d", (hh + 1) % 24, mm)
-          events << { type: "series.push", label: label, values: last }
-        end
-
-        if (@ticks % 20).zero?
-          p = store.pipeline_stages.map { |s| [s[:key], clamp(s[:count] + @rng.rand(-3..3), 0, 99)] }.to_h
-          events << p.merge(type: "pipeline")
-        end
-
-        if (@ticks % 10).zero?
-          d = store.agent_detail
-          events << { type: "agent.detail", progress: [d[:progress] + @rng.rand(1..3), 100].min }
-        end
-
-        # Restart finished activities so the "Live" tab never empties.
-        store.activity.each do |a|
-          next unless a.status == "Completed" && @rng.rand < 0.08
-          bot = store.bot(a.bot_id)
-          events << { type: "event", bot_id: a.bot_id, message: "Finished #{a.task.sub(/\A\w+ing /, "").downcase}" }
-          events << { type: "activity.status", bot_id: a.bot_id, status: "Running" }
-          events << { type: "progress", bot_id: a.bot_id, progress: 0 }
-          events << { type: "log", level: "INFO", message: "#{bot ? bot.name : a.bot_id} picked up next task" }
-        end
-
-        events + super(store)
+      def collector_status
+        return "Collector failed: #{@collector_error}" if @collector_error
+        return "Collecting on #{@collector.address}" if @collector
+        "This machine only"
       end
 
       private
 
-      def clamp(v, lo, hi)
-        [[v, lo].max, hi].min
+      def start_collector
+        @collector = Collector.new(@listen, @token) { |snap| push(type: "snapshot", snapshot: snap, local: false) }.start
+      rescue StandardError => e
+        @collector = nil
+        @collector_error = e.message
       end
     end
   end

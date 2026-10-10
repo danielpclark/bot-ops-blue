@@ -6,11 +6,18 @@
 //! clicks back to Ruby, and executes the window commands Ruby asks for.
 //!
 //! Ruby API (see lib/bot_ops/native_host.rb):
-//!   BotOps::Native.run(host)   # blocks until the window closes
+//!   BotOps::Native.run(host, w, h, title, pos)   # blocks until the window closes
+//!                                    # pos: "left,top" in screen points, or 
 //!   host.poll    -> JSON String, or "" when nothing changed
-//!   host.hit(id) -> String command ("quit", "fullscreen:on", ...) or ""
+//!   host.hit(id) -> String command ("quit", "fullscreen:toggle", ...) or ""
+//!
+//!   host.resize(w, h)          # window size in points changed; Ruby re-lays out
+//!
+//! Ruby lays out for a minimum design size. A larger window (fullscreen) is
+//! zoomed until the design fits, and the spare points along the other axis are
+//! handed to Ruby via host.resize so the panels stretch to fill the window.
 
-use eframe::egui::{self, Align2, Color32, FontFamily, FontId, Pos2, Rect, Rounding, Stroke, Vec2};
+use eframe::egui::{self, Align2, Color32, FontFamily, FontId, Key, Painter, Pos2, Rect, Rounding, Stroke, Vec2};
 use rutie::{AnyObject, Integer, Module, NilClass, Object, RString};
 use serde::Deserialize;
 use serde_json::Value;
@@ -30,7 +37,17 @@ struct HubApp {
     host: AnyObject,
     frame: Frame,
     hits_rects: Vec<(Rect, u32)>,
+    /// Minimum size Ruby lays out for, in points.
+    design: Vec2,
+    /// Size last reported to Ruby through host.resize.
+    laid_out: Vec2,
+    decorated: bool,
+    /// BOT_OPS_FULLSCREEN=1: go fullscreen once the window is placed, so it
+    /// fills the monitor it was positioned on rather than the main one.
+    start_fullscreen: bool,
 }
+
+const BACKGROUND: Color32 = Color32::from_rgb(5, 11, 20);
 
 // ---- helpers ---------------------------------------------------------------
 
@@ -128,6 +145,10 @@ fn install_fonts(ctx: &egui::Context) {
 
 // ---- app -------------------------------------------------------------------
 
+fn is_fullscreen(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.viewport().fullscreen.unwrap_or(false))
+}
+
 impl HubApp {
     fn poll_ruby(&mut self, ctx: &egui::Context) {
         match self.host.protect_send("poll", &[]) {
@@ -174,6 +195,9 @@ impl HubApp {
             }
             return;
         }
+        if is_fullscreen(ctx) {
+            return;
+        }
         if let Some((x, y, w, h)) = self.frame.drag {
             if Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h)).contains(pos) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
@@ -181,19 +205,55 @@ impl HubApp {
         }
     }
 
-    fn window_command(&self, ctx: &egui::Context, cmd: &str) {
+    // Toggles act on the window's real state, so they cannot drift out of sync
+    // with it (e.g. after leaving fullscreen with Esc or the green button).
+    fn window_command(&mut self, ctx: &egui::Context, cmd: &str) {
         match cmd {
             "quit" => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-            "fullscreen:on" => ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true)),
-            "fullscreen:off" => ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false)),
-            "decorations:on" => ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true)),
-            "decorations:off" => ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false)),
+            "fullscreen:toggle" => ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen(ctx))),
+            "decorations:toggle" => {
+                self.decorated = !self.decorated;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(self.decorated));
+            }
             _ => {}
         }
     }
 
-    fn paint(&self, ui: &egui::Ui) {
-        let painter = ui.painter();
+    // Esc leaves fullscreen; F11 or Ctrl+Cmd+F toggles it. The header glyph sits
+    // where macOS reveals its menu bar in fullscreen, so keys are the sure way out.
+    fn handle_keys(&mut self, ctx: &egui::Context) {
+        let (esc, toggle) = ctx.input(|i| {
+            let ctrl_cmd_f = i.modifiers.ctrl && i.modifiers.mac_cmd && i.key_pressed(Key::F);
+            (i.key_pressed(Key::Escape), i.key_pressed(Key::F11) || ctrl_cmd_f)
+        });
+        if esc && is_fullscreen(ctx) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+        } else if toggle {
+            self.window_command(ctx, "fullscreen:toggle");
+        }
+    }
+
+    // Zooms until the design size fits the window, then tells Ruby the window
+    // size in points so it lays the panels out to fill it (no letterboxing).
+    fn fit_to_window(&mut self, ctx: &egui::Context) {
+        let zoom = ctx.zoom_factor();
+        let window = ctx.screen_rect().size() * zoom;
+        let fit = (window.x / self.design.x).min(window.y / self.design.y).max(0.25);
+        if (fit - zoom).abs() > 0.002 {
+            ctx.set_zoom_factor(fit);
+            return; // screen_rect reflects the new zoom on the next frame
+        }
+        let size = (window / zoom).floor();
+        if size != self.laid_out {
+            self.laid_out = size;
+            let args = [Integer::new(size.x as i64).to_any_object(), Integer::new(size.y as i64).to_any_object()];
+            if self.host.protect_send("resize", &args).is_err() {
+                eprintln!("bot_ops_native: Ruby raised in resize");
+            }
+        }
+    }
+
+    fn paint(&self, painter: &Painter) {
         for cmd in &self.frame.cmds {
             match text(cmd, 0) {
                 "r" => {
@@ -263,7 +323,7 @@ impl HubApp {
                         ("left", Some(w)) => w,
                         _ => f32::INFINITY,
                     };
-                    let galley = ui.fonts(|f| f.layout_job(job));
+                    let galley = painter.layout_job(job);
                     let x = num(cmd, 2);
                     let y = num(cmd, 3);
                     let (anchor, ax) = match (text(cmd, 9), width) {
@@ -282,6 +342,11 @@ impl HubApp {
 
 impl eframe::App for HubApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if std::mem::take(&mut self.start_fullscreen) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+        }
+        self.fit_to_window(ctx);
+        self.handle_keys(ctx);
         self.poll_ruby(ctx);
 
         if ctx.input(|i| i.pointer.primary_pressed()) {
@@ -292,8 +357,8 @@ impl eframe::App for HubApp {
         }
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(Color32::from_rgb(5, 11, 20)))
-            .show(ctx, |ui| self.paint(ui));
+            .frame(egui::Frame::none().fill(BACKGROUND))
+            .show(ctx, |ui| self.paint(ui.painter()));
 
         ctx.request_repaint_after(Duration::from_millis(250));
     }
@@ -306,26 +371,44 @@ rutie::class!(BotOpsNativeClass);
 rutie::methods!(
     BotOpsNativeClass,
     _rtself,
-    fn native_run(host: AnyObject, width: Integer, height: Integer, title: RString) -> NilClass {
+    fn native_run(host: AnyObject, width: Integer, height: Integer, title: RString, position: RString) -> NilClass {
         let host = host.expect("host object required");
         let w = width.map(|v| v.to_i64() as f32).unwrap_or(1536.0);
         let h = height.map(|v| v.to_i64() as f32).unwrap_or(1024.0);
         let title = title.map(|t| t.to_string()).unwrap_or_else(|_| "Bot Ops Blue".to_owned());
 
-        let options = eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
-                .with_title(title.clone())
-                .with_decorations(false)
-                .with_resizable(false)
-                .with_inner_size([w, h]),
-            ..Default::default()
-        };
+        // "left,top" in global screen points; "" leaves placement to the OS.
+        let position = position.map(|p| p.to_string()).unwrap_or_default();
+        let position = position.split_once(',').and_then(|(x, y)| {
+            Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?))
+        });
+
+        let mut viewport = egui::ViewportBuilder::default()
+            .with_title(title.clone())
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_inner_size([w, h]);
+        if let Some((x, y)) = position {
+            viewport = viewport.with_position([x, y]);
+        }
+        let start_fullscreen = matches!(std::env::var("BOT_OPS_FULLSCREEN").as_deref(), Ok("1") | Ok("true"));
+        let options = eframe::NativeOptions { viewport, ..Default::default() };
         let result = eframe::run_native(
             &title,
             options,
             Box::new(move |cc| {
                 install_fonts(&cc.egui_ctx);
-                Ok(Box::new(HubApp { host, frame: Frame::default(), hits_rects: Vec::new() }))
+                // Zoom is driven by fit_to_window; Cmd +/- would fight it.
+                cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
+                Ok(Box::new(HubApp {
+                    host,
+                    frame: Frame::default(),
+                    hits_rects: Vec::new(),
+                    design: Vec2::new(w, h),
+                    laid_out: Vec2::new(w, h),
+                    decorated: false,
+                    start_fullscreen,
+                }))
             }),
         );
         if let Err(e) = result {
