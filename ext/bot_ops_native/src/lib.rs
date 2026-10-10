@@ -22,7 +22,7 @@ use rutie::{AnyObject, Integer, Module, NilClass, Object, RString, Thread};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[derive(Deserialize, Default)]
@@ -56,6 +56,8 @@ struct HubApp {
     /// fullscreen window). Time (egui seconds) to minimize at, once known.
     minimize_pending: bool,
     minimize_at: Option<f64>,
+    /// Consecutive polls in which Ruby raised.
+    poll_failures: u32,
 }
 
 /// Images Ruby can draw by name, embedded at build time. lib/bot_ops/canvas.rb
@@ -221,9 +223,12 @@ impl HubApp {
 
     fn poll_ruby(&mut self, ctx: &egui::Context) {
         match self.call_host("poll", &[]) {
-            Ok(json) if json.is_empty() => {}
+            Ok(json) if json.is_empty() => self.poll_failures = 0,
+            // Ruby was interrupted (Ctrl+C, TERM) during a callback.
+            Ok(json) if json == "quit" => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             Ok(json) => match serde_json::from_str::<Frame>(&json) {
                 Ok(frame) => {
+                    self.poll_failures = 0;
                     self.hits_rects = frame
                         .hits
                         .iter()
@@ -233,9 +238,15 @@ impl HubApp {
                 }
                 Err(e) => eprintln!("bot_ops_native: bad frame JSON: {e}"),
             },
+            // Keep showing the last good frame; only a Ruby side that keeps
+            // failing closes the window (NativeHost logs each exception).
             Err(()) => {
-                eprintln!("bot_ops_native: Ruby raised in poll; closing window");
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                self.poll_failures += 1;
+                if self.poll_failures >= 20 {
+                    eprintln!("bot_ops_native: Ruby raised in poll 20 times in a row; closing window");
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                return;
             }
         }
     }
@@ -491,13 +502,28 @@ rutie::methods!(
         // Run the window loop without the GVL: holding it here would starve
         // every Ruby thread for as long as the window is open.
         let mut once = Some((options, host));
+        // Ruby can't interrupt native code by itself: when it wants this
+        // thread back (SIGTERM, Ctrl+C, Thread#kill), its unblock function
+        // closes the window, which ends the loop.
+        let window_ctx: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
+        let ctx_for_loop = Arc::clone(&window_ctx);
+        let unblock = move || {
+            if let Some(ctx) = window_ctx.lock().ok().and_then(|c| c.clone()) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                ctx.request_repaint();
+            }
+        };
         let result = Thread::call_without_gvl(
             move || {
                 let (options, host) = once.take().expect("window loop runs once");
+                let ctx_for_loop = Arc::clone(&ctx_for_loop);
                 eframe::run_native(
                     &title,
                     options,
                     Box::new(move |cc| {
+                        if let Ok(mut slot) = ctx_for_loop.lock() {
+                            *slot = Some(cc.egui_ctx.clone());
+                        }
                         install_fonts(&cc.egui_ctx);
                         // Zoom is driven by fit_to_window; Cmd +/- would fight it.
                         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
@@ -513,11 +539,12 @@ rutie::methods!(
                             reported_fullscreen: None,
                             minimize_pending: false,
                             minimize_at: None,
+                            poll_failures: 0,
                         }))
                     }),
                 )
             },
-            None::<fn()>,
+            Some(unblock),
         );
         if let Err(e) = result {
             eprintln!("bot_ops_native: window error: {e}");

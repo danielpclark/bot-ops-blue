@@ -84,23 +84,19 @@ module BotOps
 
     # ---- window controls -------------------------------------------------
     #
-    # A borderless window has none of its own: small muted icons at the top
-    # right, 18pt apart, each with a 20pt click area, drawn as shapes rather
-    # than font glyphs. In fullscreen macOS slides its menu bar down over the
-    # top strip and takes the clicks there (the fullscreen control could never
-    # leave fullscreen), so in fullscreen they drop just below it.
+    # A borderless window has none of its own: small muted icons in the top
+    # right corner, 18pt apart, each with a 20pt click area, drawn as shapes
+    # rather than font glyphs (the old ⤢ glyph rendered as an empty box).
 
     CONTROL_SIZE = 10
     CONTROL_HIT = 20
     CONTROL_Y = 9
-    FULLSCREEN_CONTROL_Y = 36
     CONTROLS = [[:minimize, 1470], [:toggle_fullscreen, 1488], [:quit, 1506]].freeze
 
     # [[action, x, y, size], ...]: each icon's box in window coordinates.
     def window_controls
       dx = @width - Layout::WIDTH
-      y = @host.respond_to?(:fullscreen?) && @host.fullscreen? ? FULLSCREEN_CONTROL_Y : CONTROL_Y
-      CONTROLS.map { |action, x| [action, dx + x, y, CONTROL_SIZE] }
+      CONTROLS.map { |action, x| [action, dx + x, CONTROL_Y, CONTROL_SIZE] }
     end
 
     def draw_window_controls

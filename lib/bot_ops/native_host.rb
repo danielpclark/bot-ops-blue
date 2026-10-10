@@ -22,6 +22,25 @@ module BotOps
       @last_tick = Time.now
     end
 
+    LOCK_FILE = File.join(Dir.home, ".config", "bot-ops-blue", "dashboard.lock")
+
+    # Only one dashboard at a time: an exclusive lock held for the life of the
+    # process (the OS drops it on exit, crash or kill -9). Returns the lock
+    # file to keep open, or nil when another dashboard holds it.
+    def self.single_instance_lock(path = LOCK_FILE)
+      require "fileutils"
+      FileUtils.mkdir_p(File.dirname(path))
+      f = File.open(path, File::RDWR | File::CREAT, 0o600)
+      unless f.flock(File::LOCK_EX | File::LOCK_NB)
+        f.close
+        return nil
+      end
+      f.truncate(0)
+      f.write("#{Process.pid}\n")
+      f.flush
+      f
+    end
+
     def self.native_built?
       File.exist?(NATIVE_LIB)
     end
@@ -30,6 +49,11 @@ module BotOps
       unless self.class.native_built?
         abort "Native extension not built (#{NATIVE_LIB}). Run: bundle exec rake setup"
       end
+      @lock = self.class.single_instance_lock
+      unless @lock
+        other = File.read(LOCK_FILE).strip rescue "?"
+        abort "Bot Ops Blue is already running (pid #{other}); not opening a second window."
+      end
       require NATIVE_LIB
       @channel.start(@store)
       position = Display.position(Layout::WIDTH, Layout::HEIGHT)
@@ -37,10 +61,37 @@ module BotOps
         abort "No external monitor detected. Connect one, or run with BOT_OPS_DISPLAY=main to use the main screen."
       end
       Native.run(self, Layout::WIDTH, Layout::HEIGHT, "Bot Ops Blue", position)
+    rescue Interrupt, SignalException
+      nil # Ctrl+C or a TERM: the native side closed the window; just leave quietly
+    ensure
       @channel.stop
     end
 
     # ---- called from Rust --------------------------------------------------
+    #
+    # Rust only learns *that* one of these raised, so each logs the exception
+    # before letting it propagate. A Ctrl+C or TERM that lands while Ruby is
+    # in one of them would be swallowed the same way, so it becomes a quit
+    # instead: poll and hit answer "quit" (now or at the next poll) and the
+    # native side closes the window.
+
+    QUIT = "quit"
+
+    def self.logged(*names)
+      names.each do |name|
+        original = instance_method(name)
+        define_method(name) do |*args|
+          return QUIT if @quit && (name == :poll || name == :hit)
+          original.bind_call(self, *args)
+        rescue Interrupt, SignalException
+          @quit = true
+          name == :poll || name == :hit ? QUIT : nil
+        rescue Exception => e # rubocop:disable Lint/RescueException
+          warn "bot_ops: #{name} raised #{e.class}: #{e.message}\n  #{Array(e.backtrace).first(8).join("\n  ")}"
+          raise
+        end
+      end
+    end
 
     # Returns a JSON frame when something changed since the last poll, else "".
     # Only strings and integers cross the Rutie boundary (see README).
@@ -119,5 +170,7 @@ module BotOps
     def channel_name
       @channel.name
     end
+
+    logged :poll, :hit, :resize, :fullscreen_changed
   end
 end

@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "open3"
+require "tmpdir"
 
 class SceneTest < Minitest::Test
   def setup
@@ -82,13 +84,12 @@ class SceneTest < Minitest::Test
     assert_equal [:minimize, :toggle_fullscreen, :quit], @host.actions
   end
 
-  # Tiny controls at the top right; macOS reveals its menu bar over the top
-  # ~25pt of a fullscreen window and takes clicks there, so in fullscreen
-  # they drop below it.
-  def test_window_controls_sit_top_right_and_below_the_menu_bar_in_fullscreen
-    @scene.window_controls.each { |_, _, y, s| assert_operator y + s, :<=, 20 }
-    @host.fullscreen = true
-    @scene.window_controls.each { |_, _, y, _| assert_operator y - 5, :>=, 30 }
+  # Tiny controls in the top right corner, windowed or fullscreen.
+  def test_window_controls_sit_in_the_top_right_corner
+    [false, true].each do |fs|
+      @host.fullscreen = fs
+      @scene.window_controls.each { |_, _, y, s| assert_operator y + s, :<=, 20 }
+    end
     @scene.resize(1820, 1024)
     assert_equal 1820 - 1536 + 1506, @scene.window_controls.last[1]
   end
@@ -153,5 +154,37 @@ class FrameTest < Minitest::Test
     channel.push(type: "snapshot", snapshot: Fixtures.snapshot, local: true)
     refute_equal "", host.poll, "a snapshot is drawn right away, not on the next 2s tick"
     assert_equal 2, host.store.sessions.size
+  end
+end
+
+class NativeHostSignalTest < Minitest::Test
+  # A Ctrl+C or TERM delivered while Ruby runs a callback must close the
+  # window, not be swallowed as a failed frame.
+  def test_an_interrupt_during_a_callback_becomes_quit
+    host = BotOps::NativeHost.new(channel: BotOps::Comms::Channel.new)
+    host.poll
+    host.store.define_singleton_method(:apply_all) { |_| raise Interrupt }
+    host.instance_variable_get(:@channel).push(type: "collector", status: "x")
+    assert_equal "quit", host.poll
+    assert_equal "quit", host.poll, "and stays quit"
+    assert_equal "quit", host.hit(0)
+  end
+end
+
+class SingleInstanceTest < Minitest::Test
+  def test_a_second_dashboard_cannot_take_the_lock
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "dashboard.lock")
+      first = BotOps::NativeHost.single_instance_lock(path)
+      refute_nil first
+      assert_equal Process.pid.to_s, File.read(path).strip
+      out, status = Open3.capture2e(RbConfig.ruby, "-I", File.expand_path("../lib", __dir__), "-e",
+                                    "require 'bot_ops'; exit(BotOps::NativeHost.single_instance_lock(ARGV[0]) ? 0 : 3)", path)
+      assert_equal 3, status.exitstatus, "a second process is refused while the first holds the lock (#{out})"
+      first.close
+      _, status = Open3.capture2e(RbConfig.ruby, "-I", File.expand_path("../lib", __dir__), "-e",
+                                  "require 'bot_ops'; exit(BotOps::NativeHost.single_instance_lock(ARGV[0]) ? 0 : 3)", path)
+      assert_equal 0, status.exitstatus, "and allowed once it's gone"
+    end
   end
 end
