@@ -170,6 +170,21 @@ class CollectorTest < Minitest::Test
     c&.stop
   end
 
+  # What ngrok's basic-auth forwards: Basic with the collector token as the password.
+  def test_accepts_basic_auth_whose_password_is_the_token
+    got = Queue.new
+    c = BotOps::Collector.new("127.0.0.1:0", TOKEN, on_event: ->(e) { got << e; true }) { |_| }.start
+    uri = URI("http://#{c.address}/v1/event")
+    event = JSON.generate("session_id" => "s1", "hook_event_name" => "Stop")
+    basic = ->(pw) { "Basic " + ["botops:#{pw}"].pack("m0") }
+    assert_equal "401", Net::HTTP.post(uri, event, "Authorization" => basic.("wrong-password-123456")).code
+    assert_equal "401", Net::HTTP.post(uri, event, "Authorization" => "Basic not-base64!").code
+    assert_equal "204", Net::HTTP.post(uri, event, "Authorization" => basic.(TOKEN)).code
+    assert_equal "Stop", got.pop(timeout: 2)["hook_event_name"]
+  ensure
+    c&.stop
+  end
+
   def test_refuses_to_start_without_a_strong_token
     assert_raises(ArgumentError) { BotOps::Collector.new("0.0.0.0:47800", "short") }
   end

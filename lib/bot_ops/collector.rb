@@ -8,6 +8,8 @@ module BotOps
   # Receives snapshots from bin/bot-ops-agent running on other machines.
   #
   #   POST /v1/snapshot   Authorization: Bearer <token>   body: Probe#snapshot JSON
+  #                       (or Basic with the token as the password: what
+  #                       ngrok's basic-auth forwards, see cloud/ngrok-policy)
   #   POST /v1/event      Authorization: Bearer <token>   body: one hook event
   #                       from cloud/bot-ops-report.py (cloud sessions)
   #   GET  /v1/health     -> 200 "ok"
@@ -96,8 +98,15 @@ module BotOps
       ["400 Bad Request", "bad json"]
     end
 
+    # "Bearer <token>", or "Basic base64(<any user>:<token>)" as forwarded by
+    # the ngrok traffic policy's basic-auth (whose password is the token).
     def authorized?(header)
-      given = header.to_s.delete_prefix("Bearer ").strip
+      scheme, value = header.to_s.strip.split(" ", 2)
+      given = case scheme.to_s.downcase
+              when "bearer" then value.to_s.strip
+              when "basic" then value.to_s.strip.unpack1("m").to_s.split(":", 2)[1].to_s
+              else ""
+              end
       given.bytesize == @token.bytesize && OpenSSL.fixed_length_secure_compare(given, @token)
     end
   end
