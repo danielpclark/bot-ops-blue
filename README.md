@@ -130,89 +130,20 @@ you trust (LAN, Tailscale, or an SSH tunnel), not the open internet.
 ### Cloud sessions (claude.ai/code)
 
 Claude Code has no API that lists cloud sessions, so they report
-themselves: cloud sessions run the hooks committed in the repo they clone,
-and `cloud/bot-ops-report.py` (a Python 3 stdlib hook) forwards a trimmed
-copy of each event to the collector's `POST /v1/event`. They appear as the
-`claude.ai` source with a ☁ Cloud label, sorted in with everything else.
-Events are kept in `~/.config/bot-ops-blue/cloud-events.jsonl` (24h), so
-cloud history survives a dashboard restart.
+themselves: the cloud environment's setup script installs a small hook on
+every session VM, which posts trimmed events (prompt excerpts, tool names;
+never file contents) through an ngrok tunnel to the collector. Cloud
+sessions then appear as the `claude.ai` source with a ☁ label.
 
-What leaves a cloud session: session id, event name, cwd, git branch,
-model, a 300-character prompt excerpt, the tool name with a 160-character
-detail (command, file path, pattern or URL), and notification text. Never
-file contents or tool output. Without `BOT_OPS_URL` and `BOT_OPS_TOKEN`
-the hook does nothing, so it is harmless locally and for collaborators.
-
-1. **Reach the dashboard from the internet with ngrok.**
-
-   | Piece | Address | Notes |
-   | --- | --- | --- |
-   | Collector | `127.0.0.1:47800` | `BOT_OPS_LISTEN`; loopback only, so only the ngrok agent on this Mac can reach it |
-   | ngrok agent | outbound TCP 443 to ngrok | no inbound ports, router forwarding or firewall changes |
-   | Public URL | `https://<your-static-domain>.ngrok-free.dev` (443) | forwards to `http://127.0.0.1:47800` |
-   | ngrok inspector | `127.0.0.1:4040` | turned off (`--inspect=false`): it would record prompt excerpts |
-
-   The traffic policy (`cloud/ngrok-policy.example.yml`) exposes only
-   `/v1/event`, `/v1/snapshot` and `/v1/health` (anything else is a 404 at
-   ngrok's edge) and requires HTTP basic auth there, so nothing without the
-   password reaches this Mac. The password is the collector token, and the
-   collector checks it again. It uses only free-plan actions; rewriting
-   headers would need a paid plan (`ERR_NGROK_2263`).
-
-   ```sh
-   ngrok config add-authtoken <your ngrok authtoken>   # once
-   bundle exec rake ngrok:policy    # writes ~/.config/bot-ops-blue/ngrok-policy.yml + ngrok-basic-auth (0600)
-   BOT_OPS_LISTEN=127.0.0.1:47800 bundle exec rake run
-   bundle exec rake ngrok:tunnel DOMAIN=<your-static-domain>.ngrok-free.dev
-   ```
-
-   Claim the free static domain in the ngrok dashboard (Universal Gateway →
-   Domains) so the URL, and the network secret's host, never change.
-
-2. **Configure the cloud environment** (claude.ai/code → the environment's
-   **Edit environment** dialog):
-   - **Environment variables:** `BOT_OPS_URL=https://<your-static-domain>.ngrok-free.dev`.
-     Not the password: values here are visible to anyone using the environment.
-   - **Network secrets → Add secret** (Pro and Max plans): allowed website
-     `<your-static-domain>.ngrok-free.dev`; header **Name** `Authorization`,
-     **Prefix** `Basic`, **Value** the output of the command `rake ngrok:policy`
-     prints (base64 of `botops:<collector token>`). Anthropic's agent proxy adds it
-     to requests for that host after they leave the session, and a secret's
-     hosts are reachable under the default **Trusted** network access, so
-     that setting can stay as it is.
-   - *Or*, instead of the network secret, add
-     `BOT_OPS_TOKEN=<contents of ~/.config/bot-ops-blue/token>` to the
-     environment variables. The reporter sends it as Basic auth
-     (`botops:<token>`). Simpler, but anyone who can use the environment
-     can read it. Use one or the other, not both.
-
-3. **Install the hook for every repo with the environment's setup script.**
-   Paste all of `cloud/setup.sh` into the environment's **Setup script**. It
-   runs before Claude Code starts on each new session VM (and is cached), and
-   installs the reporter as a user-level hook in that VM's
-   `~/.claude/settings.json`, so every repository opened in the environment
-   reports and nothing is committed anywhere. `cloud/setup.sh` is generated
-   from the reporter (`rake cloud:setup_script`), which it embeds, so it
-   needs no download.
-
-   The hook only reports when `CLAUDE_CODE_REMOTE=true` and `BOT_OPS_URL`
-   is set. Despite the name, `CLAUDE_CODE_REMOTE` is the documented
-   cloud-session marker (set to `true` on the session VM, never locally),
-   unrelated to Remote Control; local sessions on the Mac or in VS
-   Code are read from disk already and never report twice.
-
-   *Fallback, per repo:* the cloud docs list hooks "from the repository and
-   from your organization's server-managed settings", so if a session
-   ignores the VM's user-level settings, commit the same hook to the repo
-   instead: `cloud/bot-ops-report.py` into `.claude/hooks/` and the hooks in
-   `cloud/settings.json` into `.claude/settings.json` (same cloud-only check).
+**Step-by-step guide, with screenshots: [docs/cloud-sessions.md](docs/cloud-sessions.md).**
 
 ## How it is put together
 
 ```
 bot_ops_blue.rb             entry point
 bin/bot-ops-agent           reports another machine to the dashboard
-cloud/                      hook + hook settings for cloud sessions
+cloud/                      cloud reporter, its setup script, hook settings, ngrok policy
+docs/                       guides (cloud sessions)
 lib/bot_ops/
   store.rb                  all dashboard state + Store#apply(event)
   probe.rb                  reads this machine's Claude Code sessions + health
