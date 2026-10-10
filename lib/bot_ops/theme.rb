@@ -19,14 +19,14 @@ module BotOps
     SPARK     = "#C8F6FF" # white-hot eye core: hairlines, corners and sparks
 
     CYAN    = "#30C8FC"   # eye glow: the primary accent
-    TEAL    = "#7FA8FF"   # periwinkle armour highlight: the secondary accent
+    TEAL    = "#4D9DFF"   # clear azure: the secondary accent
     BLUE    = "#2F6BFF"   # electric royal blue armour
     PURPLE  = "#8C8CFF"   # blue-violet shadow plating
     PINK    = "#B7FCFD"   # white-hot eye core
     YELLOW  = "#F0B23C"   # gold crest
     ORANGE  = "#C9852E"   # darker crest gold
     RED     = "#FF4D6A"
-    GREEN   = "#3CF0B4"
+    GREEN   = "#16D46B"   # rich emerald (online, healthy)
 
     TEXT    = "#E8F0FB"   # ice-white plating
     MUTED   = "#8EA0D6"

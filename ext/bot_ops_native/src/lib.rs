@@ -393,6 +393,22 @@ impl HubApp {
                         painter.add(area_mesh(&pts, num(cmd, 2), f));
                     }
                 }
+                "p" => {
+                    // ["p", [[x, y], ...], stroke, width, closed]
+                    let pts: Vec<Pos2> = cmd
+                        .get(1)
+                        .and_then(|p| p.as_array())
+                        .map(|arr| arr.iter().map(|p| Pos2::new(num(p, 0), num(p, 1))).collect())
+                        .unwrap_or_default();
+                    if pts.len() >= 2 {
+                        let st = stroke(cmd, 2, 3);
+                        if cmd.get(4).and_then(|c| c.as_bool()).unwrap_or(false) {
+                            painter.add(egui::Shape::closed_line(pts, st));
+                        } else {
+                            painter.add(egui::Shape::line(pts, st));
+                        }
+                    }
+                }
                 "i" => {
                     // ["i", name, cx, cy, r]
                     if let Some(tex) = self.textures.get(text(cmd, 1)) {

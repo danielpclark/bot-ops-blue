@@ -10,8 +10,8 @@ module BotOps
   module Panels
     include Theme
 
-    PALETTE = [CYAN, TEAL, YELLOW, BLUE, PURPLE, PINK, GREEN, ORANGE].freeze
-    ENTRY_GLYPHS = { "cloud" => "☁", "cli" => "›", "claude-vscode" => "◇", "claude-desktop" => "▣", "sdk-cli" => "⚙", "sdk-ts" => "⚙", "sdk-py" => "⚙" }.freeze
+    PALETTE = [CYAN, TEAL, YELLOW, BLUE, PURPLE, GREEN, ORANGE].freeze
+    ENTRY_GLYPHS = { "cloud" => :cloud, "cli" => "›", "claude-vscode" => "◇", "claude-desktop" => "▣", "sdk-cli" => "⚙", "sdk-ts" => "⚙", "sdk-py" => "⚙" }.freeze
 
     # Stable colour per project, so a repo keeps its colour across panels.
     def project_color(name)
@@ -338,7 +338,7 @@ module BotOps
       list.first(rows).each_with_index do |m, i|
         y = 2 + i * row_h
         c = m["online"] ? GREEN : RED
-        square_icon(14, y + 3, c, m["local"] ? "⌂" : "◈", 24)
+        square_icon(14, y + 3, c, m["local"] ? "⌂" : (m["host"] == CloudFeed::HOST ? :cloud : "◈"), 24)
         txt(clip(m["host"], (w - 120) / 6.5), 48, y + 2, size: 9, color: TEXT, weight: :bold)
         os = m["health"]["os"]
         txt([("#{m['sessions']} sessions" if m["online"]), os, (m["online"] ? nil : "last seen #{Store.ago(m['seen_at'])}")].compact.join(" · "),

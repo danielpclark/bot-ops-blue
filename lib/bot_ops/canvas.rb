@@ -60,6 +60,12 @@ module BotOps
       @cmds << Cmd.new(:area, [pts, @oy + base_y, fill])
     end
 
+    # Stroked line through points; closed: true joins the last to the first.
+    def polyline(points, stroke:, strokewidth: 1, closed: false)
+      pts = points.map { |(x, y)| [(@ox + x).round(2), (@oy + y).round(2)] }
+      @cmds << Cmd.new(:polyline, [pts, stroke, strokewidth, closed])
+    end
+
     # Named image (ext/bot_ops_native/assets/<name>.png) clipped to a circle.
     def image_circle(name, cx, cy, r)
       @cmds << Cmd.new(:image, [name.to_s, @ox + cx, @oy + cy, r])
@@ -94,7 +100,7 @@ module BotOps
 
     # ---- frame export for the native host ----------------------------------
 
-    OPS = { rect: "r", circle: "c", line: "l", wedge: "w", area: "a", text: "t", image: "i" }.freeze
+    OPS = { rect: "r", circle: "c", line: "l", wedge: "w", area: "a", text: "t", image: "i", polyline: "p" }.freeze
 
     # Compact JSON understood by ext/bot_ops_native (see src/lib.rs).
     def to_frame(drag: nil)
@@ -134,6 +140,10 @@ module BotOps
           pts, base, f = c.a
           poly = [[pts.first[0], base]] + pts + [[pts.last[0], base]]
           out << %(<polygon points="#{poly.map { |p| p.join(',') }.join(' ')}" fill="#{svg_c(f)}"/>)
+        when :polyline
+          pts, s, sw, closed = c.a
+          tag = closed ? "polygon" : "polyline"
+          out << %(<#{tag} points="#{pts.map { |p| p.join(',') }.join(' ')}" fill="none" stroke="#{svg_c(s)}" stroke-width="#{sw}" stroke-linejoin="round"/>)
         when :image
           name, cx, cy, r = c.a
           path = File.join(IMAGE_DIR, "#{name}.png")

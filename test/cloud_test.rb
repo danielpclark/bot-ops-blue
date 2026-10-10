@@ -209,3 +209,17 @@ class CloudSetupScriptTest < Minitest::Test
     end
   end
 end
+
+class CloudIconTest < Minitest::Test
+  def test_cloud_sessions_get_a_drawn_hollow_cloud
+    feed = BotOps::CloudFeed.new(log: File.join(Dir.mktmpdir, "c.jsonl"))
+    feed.ingest({ "session_id" => "c1", "hook_event_name" => "UserPromptSubmit", "cwd" => "/home/user/kis_http", "prompt" => "hi" })
+    store = Fixtures.store
+    store.apply(type: "snapshot", snapshot: feed.snapshot, local: false)
+    c = BotOps::Scene.new(store, BotOps::PreviewHost.new).build
+    refute_includes c.texts, "☁"
+    clouds = c.cmds.select { |cmd| cmd.op == :polyline && cmd.a[3] }
+    refute_empty clouds, "a closed outline, not a filled glyph"
+    assert_includes JSON.parse(c.to_json)["cmds"].map(&:first), "p"
+  end
+end

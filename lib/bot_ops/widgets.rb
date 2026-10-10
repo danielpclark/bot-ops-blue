@@ -159,14 +159,57 @@ module BotOps
       label(opts[:label], cx - r - 10, cy + r + 6, size: 10, color: TEXT, width: r * 2 + 20, align: :center) if opts[:label]
     end
 
+    # glyph is a character, or :cloud for the drawn cloud icon.
     def avatar(x, y, color_hex, glyph, d = 30)
-      @c.circle(x + d / 2.0, y + d / 2.0, d / 2.0, fill: col(color_hex, 0.14), stroke: col(color_hex, 0.9))
-      txt(glyph, x, y + d / 2 - 8, size: 12, color: color_hex, width: d, align: :center)
+      @c.circle(x + d / 2.0, y + d / 2.0, d / 2.0, fill: col(color_hex, 0.18), stroke: col(color_hex, 0.95))
+      icon_glyph(glyph, x, y, d, color_hex)
     end
 
     def square_icon(x, y, color_hex, glyph, d = 28)
-      @c.rect(x, y, d, d, curve: 6, fill: col(color_hex, 0.14), stroke: col(color_hex, 0.9))
-      txt(glyph, x, y + d / 2 - 8, size: 12, color: color_hex, width: d, align: :center)
+      @c.rect(x, y, d, d, curve: 6, fill: col(color_hex, 0.18), stroke: col(color_hex, 0.95))
+      icon_glyph(glyph, x, y, d, color_hex)
+    end
+
+    def icon_glyph(glyph, x, y, d, color_hex)
+      if glyph == :cloud
+        cloud_icon(x + d / 2.0, y + d / 2.0, d * 0.64, col(color_hex), strokewidth: [d / 18.0, 1.4].max)
+      else
+        txt(glyph, x, y + d / 2 - 8, size: 12, color: color_hex, width: d, align: :center)
+      end
+    end
+
+    # The outline of a cloud, three round lobes over a flat rounded base,
+    # as points in a unit box (width 1, centred on 0.5, 0.5). Traced once by
+    # bisecting rays from the middle against the shapes' signed distances.
+    CLOUD_OUTLINE = begin
+      circle = ->(px, py, cx, cy, r) { Math.hypot(px - cx, py - cy) - r }
+      # rounded box centred (0.51, 0.565), half size 0.35 x 0.105, corners 0.10
+      base = lambda do |px, py|
+        qx = (px - 0.51).abs - (0.35 - 0.10)
+        qy = (py - 0.565).abs - (0.105 - 0.10)
+        Math.hypot([qx, 0].max, [qy, 0].max) + [[qx, qy].max, 0].min - 0.10
+      end
+      sdf = lambda do |px, py|
+        [circle.(px, py, 0.31, 0.50, 0.15), circle.(px, py, 0.50, 0.40, 0.20),
+         circle.(px, py, 0.715, 0.48, 0.16), base.(px, py)].min
+      end
+      ox, oy = 0.51, 0.52
+      pts = (0...120).map do |i|
+        a = 2 * Math::PI * i / 120
+        lo, hi = 0.0, 0.7
+        40.times { mid = (lo + hi) / 2; sdf.(ox + mid * Math.cos(a), oy + mid * Math.sin(a)) <= 0 ? lo = mid : hi = mid }
+        [ox + lo * Math.cos(a), oy + lo * Math.sin(a)]
+      end
+      xs, ys = pts.map(&:first), pts.map(&:last)
+      w = xs.max - xs.min
+      mx, my = (xs.max + xs.min) / 2, (ys.max + ys.min) / 2
+      pts.map { |x, y| [0.5 + (x - mx) / w, 0.5 + (y - my) / w] }.freeze
+    end
+
+    # A hollow cloud, w wide, centred on (cx, cy).
+    def cloud_icon(cx, cy, w, color, strokewidth: 1.6)
+      pts = CLOUD_OUTLINE.map { |x, y| [cx + (x - 0.5) * w, cy + (y - 0.5) * w] }
+      @c.polyline(pts, stroke: color, strokewidth: strokewidth, closed: true)
     end
 
     # Pill-shaped tab; returns its width. The block runs when it is clicked.
