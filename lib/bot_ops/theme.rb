@@ -36,6 +36,7 @@ module BotOps
     STATUS_COLORS = {
       "Busy"      => CYAN,
       "Needs you" => YELLOW,
+      "Ended"     => DIM,
       "Running"   => TEAL,
       "Completed" => TEAL,
       "Pending"   => YELLOW,

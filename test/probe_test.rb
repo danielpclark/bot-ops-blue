@@ -71,6 +71,21 @@ class ProbeTest < Minitest::Test
     assert_equal "/src/api", snap["projects"].first["cwd"]
   end
 
+  def test_sessions_without_a_live_process_are_listed_as_recent
+    ended = "99999999-0000-0000-0000-000000000000"
+    write(File.join(@project, "#{ended}.jsonl"), [
+      line("ai-title", "aiTitle" => "Earlier VS Code chat", "sessionId" => ended, "entrypoint" => "claude-vscode"),
+      assistant("m9", 10, [{ "type" => "tool_use", "name" => "Read", "input" => { "file_path" => "/a.rb" } }])
+    ])
+    snap = @probe.snapshot(@now)
+    assert_equal [SID], snap["sessions"].map { |s| s["id"] }
+    recent = snap["recent"].find { |s| s["id"] == ended }
+    assert_equal "Earlier VS Code chat", recent["name"]
+    assert_equal "claude-vscode", recent["entrypoint"]
+    assert_equal "ended", recent["status"]
+    refute snap["recent"].any? { |s| s["id"] == SID }, "live sessions are not repeated as recent"
+  end
+
   def test_refresh_reads_only_appended_lines
     @probe.snapshot(@now)
     write(@transcript, [assistant("m3", 7, [{ "type" => "tool_use", "name" => "Edit", "input" => { "file_path" => "/x.rb" } }])], "a")

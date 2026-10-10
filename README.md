@@ -72,6 +72,7 @@ It sends nothing anywhere and changes no settings:
 | Source | Gives |
 | --- | --- |
 | `~/.claude/sessions/<pid>.json` (pid checked alive) | live sessions: name, cwd, status (busy/idle), entrypoint, version |
+| transcripts without a live process | **earlier** sessions from the last 12h (e.g. VS Code conversations you have moved on from), listed below the live ones |
 | `~/.claude/projects/*/<session>.jsonl` (+ `subagents/`) | model, tokens, context size, tool calls and errors, prompts, title, git branch |
 | `sysctl`, `vm_stat`, `df` (macOS) or `/proc` (Linux) | load, memory, disk, uptime |
 

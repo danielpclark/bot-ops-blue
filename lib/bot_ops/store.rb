@@ -100,8 +100,23 @@ module BotOps
       end
     end
 
+    # Sessions from the last 12h whose process has exited (earlier VS Code
+    # conversations, finished CLI runs), from every online machine.
+    def recent_sessions(now = Time.now)
+      cached(:recent) do
+        online_machines(now).flat_map do |m|
+          Array(@machines[m["host"]]["snapshot"]["recent"]).map { |s| s.merge("host" => m["host"]) }
+        end.sort_by { |s| -s["last_at"].to_f }
+      end
+    end
+
+    # Live sessions first, then recent ones.
+    def all_sessions
+      sessions + recent_sessions
+    end
+
     def session(id)
-      sessions.find { |s| s["id"] == id }
+      all_sessions.find { |s| s["id"] == id }
     end
 
     def selected_session
@@ -135,7 +150,7 @@ module BotOps
     def events
       cached(:events) do
         names = {}
-        sessions.each { |s| names[s["id"]] = s["name"] }
+        all_sessions.each { |s| names[s["id"]] = s["name"] }
         @machines.flat_map do |host, m|
           Array(m["snapshot"]["events"]).map do |e|
             e.merge("host" => host, "session" => names[e["sid"]] || e["project"] || e["sid"].to_s[0, 8])
@@ -204,9 +219,8 @@ module BotOps
 
     def stats
       t = totals
-      online = online_machines.size
       [
-        Stat.new("LIVE SESSIONS",   sessions.size.to_s, "on #{online} machine#{'s' unless online == 1}", Theme::MUTED),
+        Stat.new("LIVE SESSIONS",   sessions.size.to_s, "+#{recent_sessions.size} earlier", Theme::MUTED),
         if attention_count.positive?
           Stat.new("BUSY NOW", busy_count.to_s, "#{attention_count} need you", Theme::YELLOW)
         else

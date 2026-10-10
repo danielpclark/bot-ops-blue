@@ -24,6 +24,7 @@ module BotOps
   # unparseable is skipped, never guessed.
   class Probe
     WINDOW_S = 24 * 3600
+    RECENT_S = 12 * 3600
     EVENT_LIMIT = 1000
 
     def initialize(claude_dir: File.join(Dir.home, ".claude"), host: Socket.gethostname.sub(/\.local\z/, ""))
@@ -41,6 +42,7 @@ module BotOps
       @transcripts.refresh(now)
       @hooks.refresh(now)
       sessions = live_sessions.map { |s| merge_stats(s) }
+      live_ids = sessions.map { |s| s["id"] }
       {
         "host" => @host,
         "user" => Etc.getpwuid(Process.uid)&.name,
@@ -50,7 +52,8 @@ module BotOps
         "events" => (@transcripts.events(now) + @hooks.events(now)).sort_by { |e| -e["at"] }.first(EVENT_LIMIT),
         "hooks" => @hooks.installed?,
         "hourly" => @transcripts.hourly(now),
-        "projects" => @transcripts.projects(now)
+        "projects" => @transcripts.projects(now),
+        "recent" => @transcripts.recent(now, live_ids)
       }
     end
 
@@ -265,6 +268,20 @@ module BotOps
         (0..23).map { |i| h = first + i * 3600; [h, *sums[h]] }
       end
 
+      # Sessions with activity in the last RECENT_S whose process has exited
+      # (e.g. earlier VS Code conversations), most recent first.
+      def recent(now, live_ids)
+        cutoff = now.to_f - RECENT_S
+        @sessions.values.select { |s| s["last_at"].to_f >= cutoff && !live_ids.include?(s["id"]) && s["cwd"] }
+                 .sort_by { |s| -s["last_at"] }
+                 .first(40)
+                 .map do |s|
+                   s.slice("id", "cwd", "entrypoint", "version", "model", "title", "last_prompt", "branch", "tokens",
+                           "context", "tool_calls", "errors", "prompts", "last_tool", "last_at")
+                    .merge("name" => s["title"] || File.basename(s["cwd"].to_s), "status" => "ended")
+                 end
+      end
+
       def projects(now)
         cutoff = now.to_f - WINDOW_S
         by_cwd = Hash.new { |h, k| h[k] = { "out_tokens" => 0, "tool_calls" => 0, "prompts" => 0 } }
@@ -315,6 +332,10 @@ module BotOps
         s = (@sessions[sid] ||= { "id" => sid, "tokens" => { "in" => 0, "out" => 0, "cache_read" => 0, "cache_write" => 0 },
                                   "tool_calls" => 0, "errors" => 0, "prompts" => 0 })
         s["cwd"] ||= d["cwd"]
+        unless sidechain
+          s["entrypoint"] ||= d["entrypoint"]
+          s["version"] = d["version"] if d["version"]
+        end
         s["branch"] = d["gitBranch"] if d["gitBranch"] && !sidechain
         at = d["timestamp"] && (Time.iso8601(d["timestamp"]).to_f rescue nil)
         s["last_at"] = [s["last_at"].to_f, at].max if at
