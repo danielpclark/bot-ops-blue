@@ -44,30 +44,13 @@ module BotOps
     # ---- Sessions ------------------------------------------------------
 
     def draw_sessions_body(w, h)
-      live = @store.sessions
-      recent = @store.recent_sessions
-      if live.empty? && recent.empty?
+      list = @store.all_sessions
+      if list.empty?
         return empty_state(@store.machines.empty? ? "Reading Claude Code sessions…" : "No Claude Code sessions in the last 12 hours.")
       end
       row_h = 44
-      y = 2
       sel = @store.selected_session
-      empty_state("No live Claude Code sessions.", 8) if live.empty?
-      y = 30 if live.empty?
-      live.each do |s|
-        break if y + row_h > h
-        session_row(s, y, w, row_h, sel)
-        y += row_h
-      end
-      return if recent.empty? || y + 20 + row_h > h
-      label("EARLIER · LAST 12H", 14, y + 6, size: 8, color: DIM, weight: :bold, kerning: 1)
-      hline(130, w - 12, y + 11, col(CYAN, 0.08))
-      y += 20
-      recent.each do |s|
-        break if y + row_h > h
-        session_row(s, y, w, row_h, sel)
-        y += row_h
-      end
+      list.first((h - 4) / row_h).each_with_index { |s, i| session_row(s, 2 + i * row_h, w, row_h, sel) }
     end
 
     def session_row(s, y, w, row_h, sel)
@@ -80,14 +63,15 @@ module BotOps
       end
       color = ended ? DIM : project_color(project_of(s))
       avatar(14, y + 7, color, entry_glyph(s), 30)
-      txt(clip(s["name"], (mid - 70) / 6), 56, y + 5, size: 10, color: ended ? MUTED : TEXT, weight: :bold)
-      txt(clip([project_of(s), entry_name(s), s["host"].to_s.split("@").first].compact.join(" · "), (mid - 70) / 5.5),
+      txt(clip(Store.display_name(s), (mid - 70) / 6), 56, y + 5, size: 10, color: ended ? MUTED : TEXT, weight: :bold)
+      sub = [project_of(s), entry_name(s), (s["name"] unless ended || s["name"] == Store.display_name(s))]
+      txt(clip(sub.compact.join(" · "), (mid - 70) / 5.5),
           56, y + 21, size: 9, color: ended ? DIM : MUTED)
       status_pill(mid, y + 6, status_label(s))
       txt(Store.model_name(s["model"]), mid, y + 22, size: 9, color: ended ? DIM : MUTED)
       txt("#{s['tool_calls'].to_i} tools", w - 100, y + 5, size: 9, color: ended ? MUTED : TEXT, width: 88, align: :right)
-      age = ended ? Store.ago(s["last_at"]) : Store.duration(s["started_at"] && Time.now.to_f - s["started_at"])
-      txt(age, w - 100, y + 21, size: 9, color: MUTED, width: 88, align: :right)
+      # Last activity, which is also what the list is sorted by.
+      txt(Store.ago(s["last_at"] || s["status_at"]), w - 100, y + 21, size: 9, color: MUTED, width: 88, align: :right)
       @c.hit(4, y, w - 8, row_h) { select_session(s["id"]) }
     end
 
@@ -113,8 +97,9 @@ module BotOps
         color = project_color(project_of(s))
         box(10, y, w - 20, row_h - 6, fill: col(PANEL2), stroke: col(s["status"] == "busy" ? color : CYAN, s["status"] == "busy" ? 0.35 : 0.12), curve: 6)
         avatar(18, y + 4, color, entry_glyph(s), 30)
-        txt(clip(s["name"], (tool_x - 70) / 6.5), 58, y + 3, size: 10, color: TEXT, weight: :bold)
-        txt(clip(s["attention"] || s["title"] || s["last_prompt"] || project_of(s), (tool_x - 70) / 5.5), 58, y + 19, size: 9,
+        txt(clip(Store.display_name(s), (tool_x - 70) / 6.5), 58, y + 3, size: 10, color: TEXT, weight: :bold)
+        sub = [project_of(s), entry_name(s), (s["name"] unless s["name"] == Store.display_name(s))]
+        txt(clip(s["attention"] || sub.compact.join(" · "), (tool_x - 70) / 5.5), 58, y + 19, size: 9,
             color: s["attention"] ? YELLOW : MUTED)
         if (t = s["last_tool"])
           txt(t["name"].to_s, tool_x, y + 3, size: 9, color: color, weight: :bold)
@@ -287,15 +272,15 @@ module BotOps
       return empty_state("Select a session to see its details.") unless s
       color = project_color(project_of(s))
       avatar(16, 6, color, entry_glyph(s), 44)
-      txt(clip(s["name"], (w - 100) / 7), 72, 6, size: 11, color: TEXT, weight: :bold)
+      txt(clip(Store.display_name(s), (w - 100) / 7), 72, 6, size: 11, color: TEXT, weight: :bold)
       status_pill(72, 25, status_label(s))
       txt(clip([s["host"], entry_name(s), s["version"] && "v#{s['version']}"].compact.join(" · "), (w - 100) / 5.5),
           72, 38, size: 9, color: MUTED)
 
       col_w = ((w - 32) * 0.55).to_i
       box(12, 60, col_w, [h - 68, 100].min, fill: col(PANEL2), stroke: col(CYAN, 0.12), curve: 7)
-      label("Working on", 22, 68, size: 9, color: MUTED)
-      txt(clip(s["title"] || s["last_prompt"] || "—", (col_w - 20) / 5.5), 22, 82, size: 9, color: TEXT)
+      label("Last prompt", 22, 68, size: 9, color: MUTED)
+      txt(clip(s["last_prompt"] || "—", (col_w - 20) / 5.5), 22, 82, size: 9, color: TEXT)
       t = s["last_tool"]
       txt(clip(t ? "#{t['name']}: #{t['detail']}" : "No tool calls yet", (col_w - 20) / 5.5), 22, 98, size: 9, color: color, mono: true)
       if s["status"] == "ended"

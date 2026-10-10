@@ -133,7 +133,7 @@ module BotOps
       half = (cw - Layout::GAP) / 2
       case key
       when :sessions
-        place(:sessions, "CLAUDE SESSIONS", [cx, cy, half, ch], right: "#{@store.sessions.size} live")
+        place(:sessions, "CLAUDE SESSIONS", [cx, cy, half, ch], right: "#{@store.sessions.size} live · #{@store.recent_sessions.size} earlier")
         place(:detail, "SESSION DETAILS", [cx + half + Layout::GAP, cy, half, 300])
         place(:prompts, "RECENT PROMPTS", [cx + half + Layout::GAP, cy + 312, half, ch - 312])
       when :projects
@@ -161,7 +161,7 @@ module BotOps
     end
 
     def draw_overview
-      place(:sessions, "CLAUDE SESSIONS",  fit(Layout::FLEET), right: "#{@store.sessions.size} live")
+      place(:sessions, "CLAUDE SESSIONS",  fit(Layout::FLEET), right: "#{@store.sessions.size} live · #{@store.recent_sessions.size} earlier")
       place(:live,     "LIVE ACTIVITY",    fit(Layout::ACTIVITY))
       place(:projects, "PROJECTS · 24H",   fit(Layout::WORKFLOWS), right: "#{@store.projects.size} active", right_color: TEAL)
       place(:tools,    "TOOL CALLS", fit(Layout::QUEUE))

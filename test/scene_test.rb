@@ -30,7 +30,8 @@ class SceneTest < Minitest::Test
      "RECENT PROMPTS", "SESSION DETAILS", "EVENT LOG", "MACHINES", "BOT OPS BLUE"].each do |title|
       assert_includes c.texts, title
     end
-    assert_includes c.texts, "api-fix"
+    assert_includes c.texts, "Fix flaky login test", "sessions are named by what they are working on"
+    assert_includes c.texts, "api · CLI · api-fix"
     assert_includes c.texts, "Opus 5.5"
     assert_includes c.texts, "1 MACHINE ONLINE"
     assert_equal 4, c.count(:wedge), "four health gauges"

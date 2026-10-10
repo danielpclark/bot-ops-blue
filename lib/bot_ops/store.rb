@@ -89,14 +89,14 @@ module BotOps
 
     # ---- sessions ----------------------------------------------------------
 
-    # Live sessions on every online machine: busy first, then most recent.
+    # Live sessions on every online machine, most recent activity first.
     def sessions(now = Time.now)
       cached(:sessions) do
         online = online_machines(now).map { |m| m["host"] }
         list = online.flat_map do |host|
           Array(@machines[host]["snapshot"]["sessions"]).map { |s| s.merge("host" => host) }
         end
-        list.sort_by { |s| [s["attention"] ? 0 : (s["status"] == "busy" ? 1 : 2), -(s["last_at"] || s["status_at"]).to_f] }
+        Store.by_recency(list)
       end
     end
 
@@ -110,9 +110,20 @@ module BotOps
       end
     end
 
-    # Live sessions first, then recent ones.
+    # Live and earlier sessions in one list: whatever was worked on most
+    # recently is on top, except that a session waiting on you comes first.
     def all_sessions
-      sessions + recent_sessions
+      cached(:all_sessions) { Store.by_recency(sessions + recent_sessions) }
+    end
+
+    def self.by_recency(list)
+      list.sort_by { |s| [s["attention"] ? 0 : 1, -(s["last_at"] || s["status_at"]).to_f] }
+    end
+
+    # What a session is working on (its AI title), else its process nickname.
+    def self.display_name(s)
+      t = s["title"].to_s.strip
+      t.empty? ? s["name"].to_s : t
     end
 
     def session(id)
@@ -120,7 +131,7 @@ module BotOps
     end
 
     def selected_session
-      session(@selected_session_id) || sessions.first
+      session(@selected_session_id) || all_sessions.first
     end
 
     def visible_sessions
@@ -150,7 +161,7 @@ module BotOps
     def events
       cached(:events) do
         names = {}
-        all_sessions.each { |s| names[s["id"]] = s["name"] }
+        all_sessions.each { |s| names[s["id"]] = Store.display_name(s) }
         @machines.flat_map do |host, m|
           Array(m["snapshot"]["events"]).map do |e|
             e.merge("host" => host, "session" => names[e["sid"]] || e["project"] || e["sid"].to_s[0, 8])

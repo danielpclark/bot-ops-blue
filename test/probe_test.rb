@@ -122,6 +122,18 @@ class StoreTest < Minitest::Test
     assert_equal 4, store.sessions.size
   end
 
+  def test_most_recent_work_is_on_top_whether_live_or_ended
+    now = Time.now.to_f
+    snap = Fixtures.snapshot(now: now)
+    snap["recent"] = [{ "id" => "s-done", "name" => "Earlier chat", "title" => "Just finished", "cwd" => "/src/api",
+                        "entrypoint" => "claude-vscode", "status" => "ended", "last_at" => now - 60 }]
+    store = BotOps::Store.new.apply(type: "snapshot", snapshot: snap, local: true)
+    assert_equal %w[s-busy s-done s-idle], store.all_sessions.map { |s| s["id"] },
+                 "an ended session from a minute ago sorts above one idle for ten"
+    assert_equal "s-busy", store.selected_session["id"], "details follow the most recent work by default"
+    assert_equal "Just finished", BotOps::Store.display_name(store.all_sessions[1])
+  end
+
   def test_formatting
     assert_equal "12.4k", BotOps::Store.count(12_400)
     assert_equal "3.1M", BotOps::Store.count(3_100_000)
