@@ -143,28 +143,42 @@ detail (command, file path, pattern or URL), and notification text. Never
 file contents or tool output. Without `BOT_OPS_URL` and `BOT_OPS_TOKEN`
 the hook does nothing, so it is harmless locally and for collaborators.
 
-1. **Reach the dashboard from the internet.** The collector stays on
-   loopback; a tunnel forwards to it. With ngrok (a free static domain
-   keeps the URL stable):
+1. **Reach the dashboard from the internet with ngrok.**
+
+   | Piece | Address | Notes |
+   | --- | --- | --- |
+   | Collector | `127.0.0.1:47800` | `BOT_OPS_LISTEN`; loopback only, so only the ngrok agent on this Mac can reach it |
+   | ngrok agent | outbound TCP 443 to ngrok | no inbound ports, router forwarding or firewall changes |
+   | Public URL | `https://<your-static-domain>.ngrok-free.app` (443) | forwards to `http://127.0.0.1:47800` |
+   | ngrok inspector | `127.0.0.1:4040` | turned off (`--inspect=false`): it would record prompt excerpts |
+
+   The traffic policy (`cloud/ngrok-policy.example.yml`) exposes only
+   `/v1/event`, `/v1/snapshot` and `/v1/health` (anything else is a 404 at
+   ngrok's edge), requires HTTP basic auth there, and then swaps the Basic
+   credential for `Authorization: Bearer <collector token>` on its way to the
+   collector, so the collector token never leaves this Mac.
 
    ```sh
-   ngrok config add-authtoken <your ngrok authtoken>
-   bundle exec rake token
+   ngrok config add-authtoken <your ngrok authtoken>   # once
+   bundle exec rake ngrok:policy    # writes ~/.config/bot-ops-blue/ngrok-policy.yml + ngrok-basic-auth (0600)
    BOT_OPS_LISTEN=127.0.0.1:47800 bundle exec rake run
-   ngrok http --url=<your-static-domain>.ngrok-free.app 47800
+   bundle exec rake ngrok:tunnel DOMAIN=<your-static-domain>.ngrok-free.app
    ```
+
+   Claim the free static domain in the ngrok dashboard (Universal Gateway →
+   Domains) so the URL, and the network secret's host, never change.
 
 2. **Configure the cloud environment** (claude.ai/code → the environment's
    **Edit environment** dialog):
    - **Environment variables:** `BOT_OPS_URL=https://<your-static-domain>.ngrok-free.app`.
-     Not the token: values here are visible to anyone using the environment.
-   - **Network secrets → Add secret** (Pro and Max plans): credential type
-     **Bearer**, allowed website `<your-static-domain>.ngrok-free.app`,
-     header `Authorization` with prefix `Bearer` and the contents of
-     `~/.config/bot-ops-blue/token` as the value. Anthropic's agent proxy
-     adds it to requests for that host after they leave the session, and
-     sessions can reach a secret's hosts even under the default **Trusted**
-     network access, so that setting can stay as it is.
+     Not the password: values here are visible to anyone using the environment.
+   - **Network secrets → Add secret** (Pro and Max plans): allowed website
+     `<your-static-domain>.ngrok-free.app`; header **Name** `Authorization`,
+     **Prefix** `Basic`, **Value** the output of the command `rake ngrok:policy`
+     prints (base64 of `botops:<password>`). Anthropic's agent proxy adds it
+     to requests for that host after they leave the session, and a secret's
+     hosts are reachable under the default **Trusted** network access, so
+     that setting can stay as it is.
 
 3. **Commit the hook to each repo you use in the cloud.** Cloud sessions run
    hooks from the repository (and server-managed settings), not from a

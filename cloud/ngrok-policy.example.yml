@@ -1,0 +1,35 @@
+# ngrok traffic policy for the Bot Ops Blue collector (template).
+#
+# `bundle exec rake ngrok:policy` writes the real file, with a generated
+# password and your collector token, to ~/.config/bot-ops-blue/ngrok-policy.yml
+# (mode 0600). Don't commit a filled-in copy.
+#
+#   cloud session --Authorization: Basic--> ngrok edge --Authorization: Bearer--> 127.0.0.1:47800
+#
+# 1. Only the collector's endpoints exist from the internet.
+# 2. ngrok checks HTTP basic auth at its edge; the cloud environment's network
+#    secret supplies it (prefix "Basic", value base64 of "botops:<password>").
+# 3. The Basic credential is swapped for the collector's own bearer token, so
+#    the collector token itself never leaves this Mac.
+on_http_request:
+  - expressions:
+      - "!(req.url.path in ['/v1/event', '/v1/snapshot', '/v1/health'])"
+    actions:
+      - type: custom-response
+        config:
+          status_code: 404
+          body: not found
+  - actions:
+      - type: basic-auth
+        config:
+          realm: bot-ops-blue
+          credentials:
+            - "botops:REPLACE_WITH_A_PASSWORD_8_TO_128_CHARS"
+      - type: remove-headers
+        config:
+          headers:
+            - authorization
+      - type: add-headers
+        config:
+          headers:
+            authorization: "Bearer REPLACE_WITH_~/.config/bot-ops-blue/token"
