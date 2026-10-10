@@ -11,7 +11,7 @@ module BotOps
     include Theme
 
     PALETTE = [CYAN, TEAL, YELLOW, BLUE, PURPLE, PINK, GREEN, ORANGE].freeze
-    ENTRY_GLYPHS = { "cli" => "›", "claude-vscode" => "◇", "claude-desktop" => "▣", "sdk-cli" => "⚙", "sdk-ts" => "⚙", "sdk-py" => "⚙" }.freeze
+    ENTRY_GLYPHS = { "cloud" => "☁", "cli" => "›", "claude-vscode" => "◇", "claude-desktop" => "▣", "sdk-cli" => "⚙", "sdk-ts" => "⚙", "sdk-py" => "⚙" }.freeze
 
     # Stable colour per project, so a repo keeps its colour across panels.
     def project_color(name)
@@ -22,7 +22,7 @@ module BotOps
       File.basename(s["cwd"].to_s)
     end
 
-    ENTRY_NAMES = { "cli" => "CLI", "claude-vscode" => "VS Code", "claude-desktop" => "Desktop",
+    ENTRY_NAMES = { "cloud" => "Cloud", "cli" => "CLI", "claude-vscode" => "VS Code", "claude-desktop" => "Desktop",
                     "sdk-cli" => "SDK", "sdk-ts" => "SDK", "sdk-py" => "SDK" }.freeze
 
     def entry_name(s)
@@ -211,7 +211,8 @@ module BotOps
 
     def health_machine
       host = @store.selected_session&.dig("host")
-      @store.machines.find { |m| m["host"] == host } || @store.local_machine
+      m = @store.machines.find { |x| x["host"] == host }
+      m && m["health"]["load"] ? m : @store.local_machine # claude.ai reports no machine health
     end
 
     def draw_health_body(w, h)

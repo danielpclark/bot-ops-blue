@@ -127,20 +127,59 @@ the live views. Snapshots carry prompt excerpts and tool details over plain
 HTTP, guarded only by the token, so keep the port on loopback or a network
 you trust (LAN, Tailscale, or an SSH tunnel), not the open internet.
 
-### Cloud sessions
+### Cloud sessions (claude.ai/code)
 
-Claude Code has no documented way to list claude.ai/code cloud sessions or
-routines from outside the web UI, so they do not appear here.
+Claude Code has no API that lists cloud sessions, so they report
+themselves: cloud sessions run the hooks committed in the repo they clone,
+and `cloud/bot-ops-report.py` (a Python 3 stdlib hook) forwards a trimmed
+copy of each event to the collector's `POST /v1/event`. They appear as the
+`claude.ai` source with a ☁ Cloud label, sorted in with everything else.
+Events are kept in `~/.config/bot-ops-blue/cloud-events.jsonl` (24h), so
+cloud history survives a dashboard restart.
+
+What leaves a cloud session: session id, event name, cwd, git branch,
+model, a 300-character prompt excerpt, the tool name with a 160-character
+detail (command, file path, pattern or URL), and notification text. Never
+file contents or tool output. Without `BOT_OPS_URL` and `BOT_OPS_TOKEN`
+the hook does nothing, so it is harmless locally and for collaborators.
+
+1. **Reach the dashboard from the internet.** The collector stays on
+   loopback; a tunnel forwards to it. With ngrok (a free static domain
+   keeps the URL stable):
+
+   ```sh
+   ngrok config add-authtoken <your ngrok authtoken>
+   bundle exec rake token
+   BOT_OPS_LISTEN=127.0.0.1:47800 bundle exec rake run
+   ngrok http --url=<your-static-domain>.ngrok-free.app 47800
+   ```
+
+2. **Configure the cloud environment** (claude.ai/code, environment
+   settings): add environment variables `BOT_OPS_URL=https://<your domain>`
+   and `BOT_OPS_TOKEN=<contents of ~/.config/bot-ops-blue/token>`, and set
+   network access to **Custom** with your tunnel domain added (keep the
+   default list). The default *Trusted* level does not include tunnel
+   domains.
+
+3. **Install the hook**, either per repo or once for the environment:
+   - *Per repo:* copy `cloud/bot-ops-report.py` to the repo's
+     `.claude/hooks/` and merge `cloud/settings.json` into its
+     `.claude/settings.json`, then commit.
+   - *Environment-wide:* paste `cloud/setup.sh` into the environment's setup
+     script; it installs the hook as a user-level hook inside the cloud
+     machine for every repo (fetching the reporter from this repo's `main`).
 
 ## How it is put together
 
 ```
 bot_ops_blue.rb             entry point
 bin/bot-ops-agent           reports another machine to the dashboard
+cloud/                      hook + settings + setup script for cloud sessions
 lib/bot_ops/
   store.rb                  all dashboard state + Store#apply(event)
   probe.rb                  reads this machine's Claude Code sessions + health
-  collector.rb              HTTP endpoint for other machines' snapshots
+  collector.rb              HTTP endpoint for other machines' snapshots + cloud events
+  cloud_feed.rb             turns cloud hook events into the claude.ai source
   comms.rb                  Channel interface, Multiplexer, ClaudeChannel
   display.rb                picks the monitor the window opens on
   scene.rb                  builds a frame from the Store; handles clicks

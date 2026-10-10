@@ -8,6 +8,8 @@ module BotOps
   # Receives snapshots from bin/bot-ops-agent running on other machines.
   #
   #   POST /v1/snapshot   Authorization: Bearer <token>   body: Probe#snapshot JSON
+  #   POST /v1/event      Authorization: Bearer <token>   body: one hook event
+  #                       from cloud/bot-ops-report.py (cloud sessions)
   #   GET  /v1/health     -> 200 "ok"
   #
   # Off unless BOT_OPS_LISTEN is set (e.g. "0.0.0.0:47800" for the LAN, or a
@@ -25,13 +27,14 @@ module BotOps
 
     attr_reader :address
 
-    def initialize(listen, token, &on_snapshot)
+    def initialize(listen, token, on_event: nil, &on_snapshot)
       host, port = listen.to_s.include?(":") ? listen.split(":", 2) : ["127.0.0.1", listen]
       @host = host.empty? ? "0.0.0.0" : host
       @port = Integer(port)
       @token = token.to_s
       raise ArgumentError, "BOT_OPS_TOKEN must be set (16+ characters) to accept remote snapshots" if @token.length < 16
       @on_snapshot = on_snapshot
+      @on_event = on_event
     end
 
     def start
@@ -76,11 +79,16 @@ module BotOps
 
     def route(method, path, headers, client)
       return ["200 OK", "ok"] if method == "GET" && path == "/v1/health"
-      return ["404 Not Found", "not found"] unless method == "POST" && path == "/v1/snapshot"
+      return ["404 Not Found", "not found"] unless method == "POST" && %w[/v1/snapshot /v1/event].include?(path)
       return ["401 Unauthorized", "bad token"] unless authorized?(headers["authorization"])
       length = headers["content-length"].to_i
       return ["413 Payload Too Large", "too large"] if length <= 0 || length > MAX_BODY
-      snapshot = JSON.parse(client.read(length))
+      body = JSON.parse(client.read(length))
+      if path == "/v1/event"
+        return ["404 Not Found", "events not enabled"] unless @on_event
+        return @on_event.call(body) ? ["204 No Content", ""] : ["422 Unprocessable Entity", "not a hook event"]
+      end
+      snapshot = body
       return ["422 Unprocessable Entity", "no host"] unless snapshot.is_a?(Hash) && snapshot["host"].is_a?(String)
       @on_snapshot.call(snapshot)
       ["204 No Content", ""]

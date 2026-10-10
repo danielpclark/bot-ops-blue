@@ -73,7 +73,7 @@ module BotOps
     class ClaudeChannel < Channel
       POLL_S = 1
 
-      attr_reader :collector, :collector_error
+      attr_reader :collector, :collector_error, :cloud
 
       def initialize(probe: Probe.new, listen: ENV["BOT_OPS_LISTEN"], token: Collector.token)
         super()
@@ -89,6 +89,7 @@ module BotOps
           loop do
             begin
               push(type: "snapshot", snapshot: @probe.snapshot, local: true)
+              push(type: "snapshot", snapshot: @cloud.snapshot, local: false) if @cloud&.any?
             rescue StandardError => e
               push(type: "probe.error", message: "#{e.class}: #{e.message}")
             end
@@ -108,14 +109,17 @@ module BotOps
 
       def collector_status
         return "Collector failed: #{@collector_error}" if @collector_error
-        return "Collecting on #{@collector.address}" if @collector
+        return "Collecting on #{@collector.address} (+ cloud)" if @collector
         "This machine only"
       end
 
       private
 
       def start_collector
-        @collector = Collector.new(@listen, @token) { |snap| push(type: "snapshot", snapshot: snap, local: false) }.start
+        @cloud = CloudFeed.new
+        @collector = Collector.new(@listen, @token, on_event: ->(e) { @cloud.ingest(e) }) do |snap|
+          push(type: "snapshot", snapshot: snap, local: false)
+        end.start
       rescue StandardError => e
         @collector = nil
         @collector_error = e.message
