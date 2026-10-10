@@ -56,7 +56,7 @@ struct HubApp {
 const IMAGES: &[(&str, &[u8])] = &[("logo", include_bytes!("../assets/logo.png"))];
 const ICON_PNG: &[u8] = include_bytes!("../assets/icon.png");
 
-const BACKGROUND: Color32 = Color32::from_rgb(3, 5, 25); // Theme::BG
+const BACKGROUND: Color32 = Color32::from_rgb(5, 11, 20); // Theme::BG
 
 // ---- helpers ---------------------------------------------------------------
 

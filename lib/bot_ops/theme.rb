@@ -4,13 +4,17 @@ module BotOps
   # Colour palette and typography for the hub. Hex strings are accepted
   # directly by Shoes 3 for stroke/fill; use Theme.rgba for translucent colours.
   module Theme
-    # Sampled from assets/bot-blue.png (the logo): deep-space navy, royal
-    # armour blues, the glowing cyan eyes, ice-white plating and the gold crest.
-    BG      = "#030519"   # space behind the robot
-    PANEL   = "#060D2C"
-    PANEL2  = "#0A1642"
-    TRACK   = "#0F2160"
-    LINE    = "#16308A"
+    # Accents are sampled from assets/bot-blue.png (the logo): the royal
+    # armour blues, the glowing cyan eyes, ice-white plating and the gold
+    # crest. Backgrounds keep the original dark navy.
+    BG      = "#050B14"
+    PANEL   = "#07131F"
+    PANEL2  = "#0A1A2A"
+    TRACK   = "#0E2234"
+    LINE    = "#113347"
+
+    EDGE      = "#0B3BF0" # deep electric royal armour: every frame outline
+    EDGE_SOFT = "#0A2CB8" # the same, darker, for boxes inside a frame
 
     CYAN    = "#30C8FC"   # eye glow: the primary accent
     TEAL    = "#7FA8FF"   # periwinkle armour highlight: the secondary accent

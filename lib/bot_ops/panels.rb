@@ -57,7 +57,7 @@ module BotOps
       ended = s["status"] == "ended"
       mid = (w * 0.52).round
       if sel && s["id"] == sel["id"]
-        @c.rect(6, y + 1, w - 12, row_h - 3, curve: 6, fill: col(CYAN, 0.05), stroke: col(CYAN, 0.25))
+        @c.rect(6, y + 1, w - 12, row_h - 3, curve: 6, fill: col(CYAN, 0.05), stroke: col(EDGE))
       else
         hline(12, w - 12, y + row_h - 1, col(CYAN, 0.07))
       end
@@ -95,7 +95,7 @@ module BotOps
       items.first(rows).each_with_index do |s, i|
         y = top + i * row_h
         color = project_color(project_of(s))
-        box(10, y, w - 20, row_h - 6, fill: col(PANEL2), stroke: col(s["status"] == "busy" ? color : CYAN, s["status"] == "busy" ? 0.35 : 0.12), curve: 6)
+        box(10, y, w - 20, row_h - 6, fill: col(PANEL2), stroke: s["status"] == "busy" ? col(color, 0.7) : col(EDGE_SOFT, 0.8), curve: 6)
         avatar(18, y + 4, color, entry_glyph(s), 30)
         txt(clip(Store.display_name(s), (tool_x - 70) / 6.5), 58, y + 3, size: 10, color: TEXT, weight: :bold)
         sub = [project_of(s), entry_name(s), (s["name"] unless s["name"] == Store.display_name(s))]
@@ -234,7 +234,7 @@ module BotOps
       mw = (w - 32) / metrics.size
       metrics.each_with_index do |(glyph, name, value), i|
         x = 14 + i * mw
-        box(x, 118, mw - 6, [h - 126, 60].min, fill: col(PANEL2), stroke: col(CYAN, 0.12), curve: 7)
+        box(x, 118, mw - 6, [h - 126, 60].min, fill: col(PANEL2), curve: 7)
         txt(glyph, x + 12, 128, size: 11, color: TEAL)
         txt(name, x + 30, 128, size: 9, color: MUTED)
         txt(value, x + 12, 148, size: 13, color: TEXT, weight: :bold)
@@ -278,7 +278,7 @@ module BotOps
           72, 38, size: 9, color: MUTED)
 
       col_w = ((w - 32) * 0.55).to_i
-      box(12, 60, col_w, [h - 68, 100].min, fill: col(PANEL2), stroke: col(CYAN, 0.12), curve: 7)
+      box(12, 60, col_w, [h - 68, 100].min, fill: col(PANEL2), curve: 7)
       label("Last prompt", 22, 68, size: 9, color: MUTED)
       txt(clip(s["last_prompt"] || "—", (col_w - 20) / 5.5), 22, 82, size: 9, color: TEXT)
       t = s["last_tool"]

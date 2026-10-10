@@ -42,7 +42,7 @@ module BotOps
       @c.rect(x, y, w, h,
               curve: opts[:curve] || 6,
               fill: opts[:fill] || col(PANEL2),
-              stroke: opts[:stroke] || col(CYAN, 0.18),
+              stroke: opts[:stroke] || col(EDGE_SOFT, 0.8),
               strokewidth: opts[:strokewidth] || 1)
     end
 
@@ -67,11 +67,11 @@ module BotOps
     # A framed dashboard panel. The block draws the body with its origin at
     # the panel's top-left corner just below the title bar.
     def panel(x, y, w, h, opts = {})
-      @c.rect(x, y, w, h, curve: 7, fill: col(PANEL), stroke: col(CYAN, 0.3))
-      @c.line(x + 14, y + 1, x + w - 14, y + 1, stroke: col(CYAN, 0.35))
+      @c.rect(x, y, w, h, curve: 7, fill: col(PANEL), stroke: col(EDGE), strokewidth: 1.5)
+      @c.line(x + 14, y + 1, x + w - 14, y + 1, stroke: col(CYAN, 0.45))
       if opts[:title]
         txt(opts[:title], x + 16, y + 11, size: 11, color: TEXT, weight: :bold, kerning: 1)
-        hline(x + 1, x + w - 1, y + Layout::PANEL_TITLE_H - 1, col(CYAN, 0.1))
+        hline(x + 1, x + w - 1, y + Layout::PANEL_TITLE_H - 1, col(EDGE_SOFT, 0.6))
       end
       if opts[:right]
         rw = opts[:right_w] || 120
@@ -130,7 +130,7 @@ module BotOps
       c = opts[:color] || CYAN
       @c.rect(x, y, w, 20, curve: 10,
               fill: active ? col(c, 0.18) : col(PANEL2),
-              stroke: active ? col(c, 0.9) : col(CYAN, 0.18))
+              stroke: active ? col(c, 0.9) : col(EDGE_SOFT, 0.8))
       txt(text, x, y + 3, size: 9, color: active ? c : MUTED, width: w, align: :center)
       @c.hit(x, y, w, 20, &on_click) if on_click
       w
