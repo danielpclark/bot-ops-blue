@@ -15,6 +15,13 @@ module BotOps
   # standing between the port and anyone who can reach it.
   class Collector
     MAX_BODY = 4 * 1024 * 1024
+    TOKEN_FILE = File.join(Dir.home, ".config", "bot-ops-blue", "token")
+
+    # BOT_OPS_TOKEN, else the contents of ~/.config/bot-ops-blue/token.
+    def self.token(env = ENV)
+      return env["BOT_OPS_TOKEN"] if env["BOT_OPS_TOKEN"] && !env["BOT_OPS_TOKEN"].empty?
+      File.exist?(TOKEN_FILE) ? File.read(TOKEN_FILE).strip : nil
+    end
 
     attr_reader :address
 

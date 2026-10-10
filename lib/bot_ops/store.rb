@@ -10,7 +10,9 @@ module BotOps
   #
   #   { type: "snapshot", snapshot: <Probe#snapshot>, local: true/false }
   #
-  # which replaces everything known about one machine. Machines that stop
+  # which replaces everything known about one machine account. Sources are
+  # keyed "user@host", so two accounts on one Mac (each running the probe or
+  # bin/bot-ops-agent as itself) show up side by side instead of colliding. Machines that stop
   # reporting are marked offline after OFFLINE_AFTER_S and their sessions
   # drop out of the live views (their history stays in the usage numbers).
   class Store
@@ -43,7 +45,8 @@ module BotOps
       when "snapshot"
         snap = ev[:snapshot]
         return self unless snap.is_a?(Hash) && snap["host"].is_a?(String)
-        @machines[snap["host"]] = { "snapshot" => snap, "received_at" => ev[:at] || Time.now, "local" => ev[:local] ? true : false }
+        key = snap["user"].is_a?(String) && !snap["user"].empty? ? "#{snap['user']}@#{snap['host']}" : snap["host"]
+        @machines[key] = { "snapshot" => snap, "received_at" => ev[:at] || Time.now, "local" => ev[:local] ? true : false }
         @probe_error = nil if ev[:local]
       when "collector" then @collector_status = ev[:status].to_s
       when "probe.error" then @probe_error = ev[:message].to_s

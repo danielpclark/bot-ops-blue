@@ -94,26 +94,37 @@ for those four events (for example with `/hooks`) as
 `ruby /path/to/bot-ops-blue/bin/bot-ops-hook`; the Settings page shows
 whether events are arriving.
 
-### Adding your other machines
+### Adding other accounts and machines
 
-The dashboard can accept snapshots from other machines. On the machine
-showing the dashboard:
+The probe only reads the account it runs as. Sessions from another macOS
+account on the same Mac (for example a VS Code window logged in as a
+different user), or from another machine, reach the dashboard through
+`bin/bot-ops-agent`, run as that account, posting to the dashboard's
+collector. Sources are keyed `user@host`, so accounts sharing a Mac show up
+separately.
+
+On the account showing the dashboard:
 
 ```sh
-BOT_OPS_LISTEN=0.0.0.0:47800 BOT_OPS_TOKEN=<16+ random chars> bundle exec rake run
+bundle exec rake token                       # creates ~/.config/bot-ops-blue/token (0600)
+BOT_OPS_LISTEN=127.0.0.1:47800 bundle exec rake run   # same Mac only
+BOT_OPS_LISTEN=0.0.0.0:47800 bundle exec rake run     # LAN / Tailscale
 ```
 
-On each other machine (Ruby 3.0+ and a checkout of this repo, no gems):
+In each other account or machine, with a checkout of this repo and any Ruby
+2.6+ (macOS's built-in `/usr/bin/ruby` works, no gems needed), put the same
+token in `~/.config/bot-ops-blue/token` (or `BOT_OPS_TOKEN`) and run:
 
 ```sh
-BOT_OPS_COLLECTOR=http://<dashboard-host>:47800 BOT_OPS_TOKEN=<same token> bin/bot-ops-agent
+bin/bot-ops-agent                                         # same Mac
+BOT_OPS_COLLECTOR=http://<dashboard-host>:47800 bin/bot-ops-agent   # elsewhere
 ```
 
-The agent posts a snapshot every 3 seconds (`BOT_OPS_INTERVAL`). A machine
+The agent posts a snapshot every 3 seconds (`BOT_OPS_INTERVAL`). A source
 that stops reporting turns offline after 15 seconds and its sessions leave
 the live views. Snapshots carry prompt excerpts and tool details over plain
-HTTP, guarded only by the token, so keep the port on a network you trust
-(LAN, Tailscale, or an SSH tunnel), not the open internet.
+HTTP, guarded only by the token, so keep the port on loopback or a network
+you trust (LAN, Tailscale, or an SSH tunnel), not the open internet.
 
 ### Cloud sessions
 

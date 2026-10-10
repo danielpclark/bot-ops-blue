@@ -5,6 +5,10 @@
 #
 #   BOT_OPS_COLLECTOR=http://<dashboard-host>:47800 BOT_OPS_TOKEN=<token> bin/bot-ops-agent
 #
+# BOT_OPS_COLLECTOR defaults to http://127.0.0.1:47800 (another account on
+# the dashboard's own Mac), and the token may instead be kept in
+# ~/.config/bot-ops-blue/token.
+#
 # Needs only Ruby 3.0+ (standard library) and a checkout of this repo. It
 # reads ~/.claude locally (see lib/bot_ops/probe.rb) and POSTs a snapshot
 # every BOT_OPS_INTERVAL seconds (default 3). Snapshots include session
@@ -18,14 +22,14 @@ require "net/http"
 require "uri"
 require "json"
 require "bot_ops/probe"
+require "bot_ops/collector"
 
-collector = ENV["BOT_OPS_COLLECTOR"].to_s
-token = ENV["BOT_OPS_TOKEN"].to_s
+collector = ENV.fetch("BOT_OPS_COLLECTOR", "http://127.0.0.1:47800")
+token = BotOps::Collector.token.to_s
 interval = Float(ENV.fetch("BOT_OPS_INTERVAL", "3"))
 once = ARGV.include?("--once")
 
-abort "Set BOT_OPS_COLLECTOR (e.g. http://my-mac.local:47800)" if collector.empty?
-abort "Set BOT_OPS_TOKEN to the dashboard's token" if token.empty?
+abort "Set BOT_OPS_TOKEN, or put the dashboard's token in #{BotOps::Collector::TOKEN_FILE}" if token.empty?
 
 uri = URI.join(collector.end_with?("/") ? collector : "#{collector}/", "v1/snapshot")
 probe = ENV["BOT_OPS_HOST"] ? BotOps::Probe.new(host: ENV["BOT_OPS_HOST"]) : BotOps::Probe.new

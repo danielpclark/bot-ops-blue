@@ -41,6 +41,17 @@ task :compile do
   puts "Installed #{INSTALLED}"
 end
 
+desc "Create the collector token (~/.config/bot-ops-blue/token) if it does not exist"
+task :token do
+  require "securerandom"
+  path = File.join(Dir.home, ".config", "bot-ops-blue", "token")
+  unless File.exist?(path)
+    FileUtils.mkdir_p(File.dirname(path))
+    File.write(path, SecureRandom.hex(24) + "\n", perm: 0o600)
+  end
+  puts "Token: #{path}"
+end
+
 desc "Run the Bot Ops Blue desktop app"
 task :run do
   Rake::Task[:compile].invoke unless File.exist?(INSTALLED)

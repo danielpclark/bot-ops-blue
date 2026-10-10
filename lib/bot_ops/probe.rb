@@ -43,6 +43,7 @@ module BotOps
       sessions = live_sessions.map { |s| merge_stats(s) }
       {
         "host" => @host,
+        "user" => Etc.getpwuid(Process.uid)&.name,
         "at" => now.to_f,
         "machine" => machine(now),
         "sessions" => sessions,
@@ -56,11 +57,13 @@ module BotOps
     # ---- sessions ----------------------------------------------------------
 
     def live_sessions
-      Dir.glob(File.join(@claude_dir, "sessions", "*.json")).filter_map do |path|
+      # map + compact rather than filter_map: the agent also runs on macOS's
+      # built-in Ruby 2.6 (e.g. under a second account with no rvm/rbenv).
+      Dir.glob(File.join(@claude_dir, "sessions", "*.json")).map do |path|
         s = JSON.parse(File.read(path)) rescue next
         next unless s.is_a?(Hash) && s["sessionId"] && alive?(s["pid"])
         s
-      end
+      end.compact
     end
 
     def alive?(pid)
@@ -278,7 +281,7 @@ module BotOps
           p["last_at"] = [p["last_at"].to_f, s["last_at"]].max
           p["branch"] ||= s["branch"]
         end
-        by_cwd.filter_map { |cwd, p| p.merge("cwd" => cwd) if p["last_at"] }.sort_by { |p| -p["last_at"] }
+        by_cwd.map { |cwd, p| p.merge("cwd" => cwd) if p["last_at"] }.compact.sort_by { |p| -p["last_at"] }
       end
 
       private
@@ -363,7 +366,7 @@ module BotOps
             bucket(s, at)[3] += 1
             event(s, at, "error", "tool error", one_line(text_of(b["content"])))
           end
-          text = c.filter_map { |b| b["text"] if b.is_a?(Hash) && b["type"] == "text" }.join(" ")
+          text = c.map { |b| b["text"] if b.is_a?(Hash) && b["type"] == "text" }.compact.join(" ")
         else
           text = c.to_s
         end
@@ -417,7 +420,7 @@ module BotOps
       end
 
       def text_of(content)
-        content.is_a?(Array) ? content.filter_map { |b| b["text"] if b.is_a?(Hash) }.join(" ") : content.to_s
+        content.is_a?(Array) ? content.map { |b| b["text"] if b.is_a?(Hash) }.compact.join(" ") : content.to_s
       end
 
       def one_line(text)

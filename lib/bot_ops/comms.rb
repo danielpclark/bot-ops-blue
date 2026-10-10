@@ -75,7 +75,7 @@ module BotOps
 
       attr_reader :collector, :collector_error
 
-      def initialize(probe: Probe.new, listen: ENV["BOT_OPS_LISTEN"], token: ENV["BOT_OPS_TOKEN"])
+      def initialize(probe: Probe.new, listen: ENV["BOT_OPS_LISTEN"], token: Collector.token)
         super()
         @probe = probe
         @listen = listen

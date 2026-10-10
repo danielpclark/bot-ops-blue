@@ -99,6 +99,14 @@ class StoreTest < Minitest::Test
     assert_equal "2", store.stats.first.value
   end
 
+  def test_two_accounts_on_one_machine_are_kept_apart
+    store = BotOps::Store.new
+    store.apply(type: "snapshot", snapshot: Fixtures.snapshot(host: "mac").merge("user" => "work"), local: true)
+    store.apply(type: "snapshot", snapshot: Fixtures.snapshot(host: "mac").merge("user" => "danielpclark"), local: false)
+    assert_equal ["work@mac", "danielpclark@mac"], store.machines.map { |m| m["host"] }
+    assert_equal 4, store.sessions.size
+  end
+
   def test_formatting
     assert_equal "12.4k", BotOps::Store.count(12_400)
     assert_equal "3.1M", BotOps::Store.count(3_100_000)

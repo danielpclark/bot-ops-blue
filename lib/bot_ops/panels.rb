@@ -22,6 +22,13 @@ module BotOps
       File.basename(s["cwd"].to_s)
     end
 
+    ENTRY_NAMES = { "cli" => "CLI", "claude-vscode" => "VS Code", "claude-desktop" => "Desktop",
+                    "sdk-cli" => "SDK", "sdk-ts" => "SDK", "sdk-py" => "SDK" }.freeze
+
+    def entry_name(s)
+      ENTRY_NAMES[s["entrypoint"]] || s["entrypoint"] || s["kind"]
+    end
+
     def entry_glyph(s)
       ENTRY_GLYPHS[s["entrypoint"]] || (s["kind"] == "background" ? "◌" : "✦")
     end
@@ -53,7 +60,8 @@ module BotOps
         color = project_color(project_of(s))
         avatar(14, y + 7, color, entry_glyph(s), 30)
         txt(clip(s["name"], (mid - 70) / 6), 56, y + 5, size: 10, color: TEXT, weight: :bold)
-        txt(clip("#{project_of(s)} · #{s['host']}", (mid - 70) / 5.5), 56, y + 21, size: 9, color: MUTED)
+        txt(clip([project_of(s), entry_name(s), s["host"].to_s.split("@").first].compact.join(" · "), (mid - 70) / 5.5),
+            56, y + 21, size: 9, color: MUTED)
         status_pill(mid, y + 6, status_label(s))
         txt(Store.model_name(s["model"]), mid, y + 22, size: 9, color: MUTED)
         txt("#{s['tool_calls'].to_i} tools", w - 100, y + 5, size: 9, color: TEXT, width: 88, align: :right)
@@ -260,7 +268,7 @@ module BotOps
       avatar(16, 6, color, entry_glyph(s), 44)
       txt(clip(s["name"], (w - 100) / 7), 72, 6, size: 11, color: TEXT, weight: :bold)
       status_pill(72, 25, status_label(s))
-      txt(clip([s["host"], s["entrypoint"], s["version"] && "v#{s['version']}"].compact.join(" · "), (w - 100) / 5.5),
+      txt(clip([s["host"], entry_name(s), s["version"] && "v#{s['version']}"].compact.join(" · "), (w - 100) / 5.5),
           72, 38, size: 9, color: MUTED)
 
       col_w = ((w - 32) * 0.55).to_i
