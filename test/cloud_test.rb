@@ -81,7 +81,7 @@ class CloudReporterTest < Minitest::Test
     payload = { "session_id" => "s1", "hook_event_name" => "PostToolUse", "cwd" => "/repo", "tool_name" => "Write",
                 "tool_input" => { "file_path" => "/repo/secret.rb", "content" => "API_KEY=xyz" },
                 "tool_response" => { "content" => "big output" }, "transcript_path" => "/tmp/t.jsonl" }
-    out, status = run_hook(payload, "BOT_OPS_URL" => url, "BOT_OPS_TOKEN" => TOKEN)
+    out, status = run_hook(payload, "BOT_OPS_URL" => url, "BOT_OPS_TOKEN" => TOKEN, "CLAUDE_CODE_REMOTE" => "true")
     assert status.success?
     assert_equal "", out, "stdout must stay empty"
     e = got.pop(timeout: 5)
@@ -109,7 +109,7 @@ class CloudReporterTest < Minitest::Test
       seen << head
     end
     _, status = run_hook({ "session_id" => "s1", "hook_event_name" => "Stop" },
-                         "BOT_OPS_URL" => "http://127.0.0.1:#{server.addr[1]}", "BOT_OPS_TOKEN" => "")
+                         "BOT_OPS_URL" => "http://127.0.0.1:#{server.addr[1]}", "BOT_OPS_TOKEN" => "", "CLAUDE_CODE_REMOTE" => "true")
     assert status.success?
     head = seen.pop(timeout: 5)
     assert_equal "POST /v1/event HTTP/1.1", head.first
@@ -120,10 +120,61 @@ class CloudReporterTest < Minitest::Test
     server&.close
   end
 
+  # Local sessions (Mac, VS Code) are read from disk already; the reporter
+  # must stay silent there even if BOT_OPS_URL happens to be set.
+  def test_reporter_is_silent_outside_cloud_sessions
+    skip "python3 not installed" unless system("python3", "-c", "1", out: File::NULL, err: File::NULL)
+    server = TCPServer.new("127.0.0.1", 0)
+    _, status = run_hook({ "session_id" => "s1", "hook_event_name" => "Stop" },
+                         "BOT_OPS_URL" => "http://127.0.0.1:#{server.addr[1]}", "CLAUDE_CODE_REMOTE" => "")
+    assert status.success?
+    assert_nil IO.select([server], nil, nil, 1.5), "no request without CLAUDE_CODE_REMOTE=true"
+  ensure
+    server&.close
+  end
+
   def test_reporter_does_nothing_without_configuration
     skip "python3 not installed" unless system("python3", "-c", "1", out: File::NULL, err: File::NULL)
     out, status = run_hook({ "session_id" => "s1", "hook_event_name" => "Stop" }, "BOT_OPS_URL" => "", "BOT_OPS_TOKEN" => "")
     assert status.success?
     assert_equal "", out
+  end
+end
+
+class CloudSetupScriptTest < Minitest::Test
+  def test_committed_setup_script_matches_the_reporter
+    require "bot_ops/cloud_setup"
+    assert_equal BotOps::CloudSetup.script, File.read(BotOps::CloudSetup::PATH),
+                 "cloud/setup.sh is stale: run `bundle exec rake cloud:setup_script`"
+  end
+
+  def test_setup_script_installs_a_cloud_only_user_hook_for_every_repo
+    skip "python3 not installed" unless system("python3", "-c", "1", out: File::NULL, err: File::NULL)
+    require "bot_ops/cloud_setup"
+    Dir.mktmpdir do |home|
+      FileUtils.mkdir_p(File.join(home, ".claude"))
+      File.write(File.join(home, ".claude", "settings.json"), JSON.generate("model" => "x", "hooks" => { "Stop" => [{ "hooks" => [{ "type" => "command", "command" => "keep-me" }] }] }))
+      2.times { assert system({ "HOME" => home }, "bash", BotOps::CloudSetup::PATH, out: File::NULL, err: File::NULL) }
+
+      installed = File.read(File.join(home, ".claude", "hooks", "bot-ops-report.py"))
+      assert_equal File.read(File.join(BotOps::CloudSetup::DIR, "bot-ops-report.py")), installed
+      settings = JSON.parse(File.read(File.join(home, ".claude", "settings.json")))
+      assert_equal "x", settings["model"]
+      assert_equal %w[keep-me] + [BotOps::CloudSetup::COMMAND], settings["hooks"]["Stop"].map { |g| g["hooks"][0]["command"] },
+                   "existing hooks kept, ours added once"
+      assert_equal BotOps::CloudSetup::EVENTS.sort, (settings["hooks"].keys).sort
+
+      # Fire the installed hook command the way Claude Code would in the cloud.
+      server = TCPServer.new("127.0.0.1", 0)
+      env = { "HOME" => home, "CLAUDE_CODE_REMOTE" => "true", "BOT_OPS_URL" => "http://127.0.0.1:#{server.addr[1]}" }
+      _, status = Open3.capture2(env, "bash", "-c", BotOps::CloudSetup::COMMAND,
+                                 stdin_data: JSON.generate("session_id" => "c1", "hook_event_name" => "Stop"))
+      assert status.success?
+      refute_nil IO.select([server], nil, nil, 5), "the installed hook reported"
+      c = server.accept
+      assert_equal "POST /v1/event HTTP/1.1", c.gets.strip
+      c.close
+      server.close
+    end
   end
 end

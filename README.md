@@ -186,14 +186,24 @@ the hook does nothing, so it is harmless locally and for collaborators.
      (`botops:<token>`). Simpler, but anyone who can use the environment
      can read it. Use one or the other, not both.
 
-3. **Commit the hook to each repo you use in the cloud.** Cloud sessions run
-   hooks from the repository (and server-managed settings), not from a
-   user-level `~/.claude/settings.json`, so a setup script can't install it.
-   Copy `cloud/bot-ops-report.py` to the repo's `.claude/hooks/` and merge
-   `cloud/settings.json` into its `.claude/settings.json`. The hook runs in
-   local sessions too, but does nothing there unless `BOT_OPS_URL` is set.
-   Sessions that open several repositories at once don't load repository
-   hooks, so they won't report.
+3. **Install the hook for every repo with the environment's setup script.**
+   Paste all of `cloud/setup.sh` into the environment's **Setup script**. It
+   runs before Claude Code starts on each new session VM (and is cached), and
+   installs the reporter as a user-level hook in that VM's
+   `~/.claude/settings.json`, so every repository opened in the environment
+   reports and nothing is committed anywhere. `cloud/setup.sh` is generated
+   from the reporter (`rake cloud:setup_script`), which it embeds, so it
+   needs no download.
+
+   The hook only reports when `CLAUDE_CODE_REMOTE=true` (set by Claude Code
+   on the web) and `BOT_OPS_URL` is set; local sessions on the Mac or in VS
+   Code are read from disk already and never report twice.
+
+   *Fallback, per repo:* the cloud docs list hooks "from the repository and
+   from your organization's server-managed settings", so if a session
+   ignores the VM's user-level settings, commit the same hook to the repo
+   instead: `cloud/bot-ops-report.py` into `.claude/hooks/` and the hooks in
+   `cloud/settings.json` into `.claude/settings.json` (same cloud-only check).
 
 ## How it is put together
 

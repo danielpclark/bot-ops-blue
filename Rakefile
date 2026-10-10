@@ -85,6 +85,18 @@ namespace :ngrok do
   end
 end
 
+# ---- cloud environment setup script ----------------------------------------
+
+namespace :cloud do
+  desc "Regenerate cloud/setup.sh (paste into the claude.ai/code environment's Setup script)"
+  task :setup_script do
+    $LOAD_PATH.unshift(File.join(ROOT, "lib"))
+    require "bot_ops/cloud_setup"
+    File.write(BotOps::CloudSetup::PATH, BotOps::CloudSetup.script)
+    puts "Wrote #{BotOps::CloudSetup::PATH}"
+  end
+end
+
 desc "Run the Bot Ops Blue desktop app"
 task :run do
   Rake::Task[:compile].invoke unless File.exist?(INSTALLED)
