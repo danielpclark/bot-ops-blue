@@ -3,6 +3,7 @@
 require "test_helper"
 require "tmpdir"
 require "open3"
+require "socket"
 
 class CloudFeedTest < Minitest::Test
   def setup
@@ -89,6 +90,34 @@ class CloudReporterTest < Minitest::Test
     refute_includes JSON.generate(e), "API_KEY", "file contents never leave the session"
   ensure
     c&.stop
+  end
+
+  # In a cloud session the token is a network secret: the agent proxy adds the
+  # Authorization header, so the reporter must post without one.
+  def test_reporter_leaves_authorization_to_the_network_secret
+    skip "python3 not installed" unless system("python3", "-c", "1", out: File::NULL, err: File::NULL)
+    server = TCPServer.new("127.0.0.1", 0)
+    seen = Queue.new
+    t = Thread.new do
+      c = server.accept
+      head = []
+      while (l = c.gets) && l != "\r\n"
+        head << l.strip
+      end
+      c.write("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+      c.close
+      seen << head
+    end
+    _, status = run_hook({ "session_id" => "s1", "hook_event_name" => "Stop" },
+                         "BOT_OPS_URL" => "http://127.0.0.1:#{server.addr[1]}", "BOT_OPS_TOKEN" => "")
+    assert status.success?
+    head = seen.pop(timeout: 5)
+    assert_equal "POST /v1/event HTTP/1.1", head.first
+    refute head.any? { |h| h.downcase.start_with?("authorization:") }, "no token in the session"
+    assert head.any? { |h| h.downcase.start_with?("ngrok-skip-browser-warning:") }
+  ensure
+    t&.kill
+    server&.close
   end
 
   def test_reporter_does_nothing_without_configuration

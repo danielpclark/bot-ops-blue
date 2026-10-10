@@ -154,27 +154,33 @@ the hook does nothing, so it is harmless locally and for collaborators.
    ngrok http --url=<your-static-domain>.ngrok-free.app 47800
    ```
 
-2. **Configure the cloud environment** (claude.ai/code, environment
-   settings): add environment variables `BOT_OPS_URL=https://<your domain>`
-   and `BOT_OPS_TOKEN=<contents of ~/.config/bot-ops-blue/token>`, and set
-   network access to **Custom** with your tunnel domain added (keep the
-   default list). The default *Trusted* level does not include tunnel
-   domains.
+2. **Configure the cloud environment** (claude.ai/code → the environment's
+   **Edit environment** dialog):
+   - **Environment variables:** `BOT_OPS_URL=https://<your-static-domain>.ngrok-free.app`.
+     Not the token: values here are visible to anyone using the environment.
+   - **Network secrets → Add secret** (Pro and Max plans): credential type
+     **Bearer**, allowed website `<your-static-domain>.ngrok-free.app`,
+     header `Authorization` with prefix `Bearer` and the contents of
+     `~/.config/bot-ops-blue/token` as the value. Anthropic's agent proxy
+     adds it to requests for that host after they leave the session, and
+     sessions can reach a secret's hosts even under the default **Trusted**
+     network access, so that setting can stay as it is.
 
-3. **Install the hook**, either per repo or once for the environment:
-   - *Per repo:* copy `cloud/bot-ops-report.py` to the repo's
-     `.claude/hooks/` and merge `cloud/settings.json` into its
-     `.claude/settings.json`, then commit.
-   - *Environment-wide:* paste `cloud/setup.sh` into the environment's setup
-     script; it installs the hook as a user-level hook inside the cloud
-     machine for every repo (fetching the reporter from this repo's `main`).
+3. **Commit the hook to each repo you use in the cloud.** Cloud sessions run
+   hooks from the repository (and server-managed settings), not from a
+   user-level `~/.claude/settings.json`, so a setup script can't install it.
+   Copy `cloud/bot-ops-report.py` to the repo's `.claude/hooks/` and merge
+   `cloud/settings.json` into its `.claude/settings.json`. The hook runs in
+   local sessions too, but does nothing there unless `BOT_OPS_URL` is set.
+   Sessions that open several repositories at once don't load repository
+   hooks, so they won't report.
 
 ## How it is put together
 
 ```
 bot_ops_blue.rb             entry point
 bin/bot-ops-agent           reports another machine to the dashboard
-cloud/                      hook + settings + setup script for cloud sessions
+cloud/                      hook + hook settings for cloud sessions
 lib/bot_ops/
   store.rb                  all dashboard state + Store#apply(event)
   probe.rb                  reads this machine's Claude Code sessions + health

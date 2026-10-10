@@ -4,10 +4,16 @@
 A Claude Code command hook for cloud sessions (claude.ai/code). Each hook
 event is trimmed to what the dashboard shows and POSTed to its collector:
 
-    BOT_OPS_URL    https://<your tunnel>     (set in the cloud environment)
-    BOT_OPS_TOKEN  the collector's token     (set in the cloud environment)
+    BOT_OPS_URL    https://<your tunnel>   (an environment variable on the
+                                           cloud environment)
 
-Without both variables it does nothing, so the hook is harmless in local
+The collector's token is NOT given to the session: store it as a network
+secret on the environment (Bearer, allowed website = the tunnel's host), and
+Anthropic's agent proxy adds the Authorization header after the request
+leaves the session. BOT_OPS_TOKEN, if set, is sent directly instead (for
+testing, or a self-hosted runner).
+
+Without BOT_OPS_URL it does nothing, so the hook is harmless in local
 sessions and for anyone else who clones the repo. It never prints (stdout
 from some hooks is fed back to Claude), always exits 0, and sends from a
 forked background process so a session never waits on the network.
@@ -64,7 +70,7 @@ def trim(payload):
 def main():
     url = os.environ.get("BOT_OPS_URL", "").rstrip("/")
     token = os.environ.get("BOT_OPS_TOKEN", "")
-    if not url or not token:
+    if not url:
         return
     payload = json.load(sys.stdin)
     if not isinstance(payload, dict) or not payload.get("session_id"):
@@ -74,8 +80,10 @@ def main():
         return  # the hook returns at once; the child does the network call
     try:
         os.setsid()
-        req = urllib.request.Request(url + "/v1/event", data=body, method="POST", headers={
-            "Content-Type": "application/json", "Authorization": "Bearer " + token})
+        headers = {"Content-Type": "application/json", "ngrok-skip-browser-warning": "1"}
+        if token:
+            headers["Authorization"] = "Bearer " + token
+        req = urllib.request.Request(url + "/v1/event", data=body, method="POST", headers=headers)
         urllib.request.urlopen(req, timeout=5).read()
     except Exception:
         pass
