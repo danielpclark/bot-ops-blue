@@ -180,6 +180,11 @@ the hook does nothing, so it is harmless locally and for collaborators.
      to requests for that host after they leave the session, and a secret's
      hosts are reachable under the default **Trusted** network access, so
      that setting can stay as it is.
+   - *Or*, instead of the network secret, add
+     `BOT_OPS_TOKEN=<contents of ~/.config/bot-ops-blue/token>` to the
+     environment variables. The reporter sends it as Basic auth
+     (`botops:<token>`). Simpler, but anyone who can use the environment
+     can read it. Use one or the other, not both.
 
 3. **Commit the hook to each repo you use in the cloud.** Cloud sessions run
    hooks from the repository (and server-managed settings), not from a

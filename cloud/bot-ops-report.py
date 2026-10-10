@@ -10,8 +10,9 @@ event is trimmed to what the dashboard shows and POSTed to its collector:
 The collector's token is NOT given to the session: store it as a network
 secret on the environment (Bearer, allowed website = the tunnel's host), and
 Anthropic's agent proxy adds the Authorization header after the request
-leaves the session. BOT_OPS_TOKEN, if set, is sent directly instead (for
-testing, or a self-hosted runner).
+leaves the session. Alternatively set BOT_OPS_TOKEN (visible to anyone
+using the environment): it is sent as HTTP Basic auth, "botops:<token>",
+which the ngrok edge and the collector both accept.
 
 Without BOT_OPS_URL it does nothing, so the hook is harmless in local
 sessions and for anyone else who clones the repo. It never prints (stdout
@@ -25,6 +26,7 @@ notification text. File contents and tool output are never sent.
 
 Standard library only (Python 3.6+).
 """
+import base64
 import json
 import os
 import subprocess
@@ -81,8 +83,8 @@ def main():
     try:
         os.setsid()
         headers = {"Content-Type": "application/json", "ngrok-skip-browser-warning": "1"}
-        if token:
-            headers["Authorization"] = "Bearer " + token
+        if token:  # Basic, because the ngrok edge's basic-auth checks it first
+            headers["Authorization"] = "Basic " + base64.b64encode(("botops:" + token).encode()).decode()
         req = urllib.request.Request(url + "/v1/event", data=body, method="POST", headers=headers)
         urllib.request.urlopen(req, timeout=5).read()
     except Exception:
