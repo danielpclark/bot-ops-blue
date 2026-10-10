@@ -110,4 +110,14 @@ class FrameTest < Minitest::Test
     host.toggle_fullscreen
     assert_equal "fullscreen:toggle", host.hit(-1)
   end
+
+  def test_native_host_applies_new_data_on_the_next_frame
+    channel = BotOps::Comms::Channel.new
+    host = BotOps::NativeHost.new(channel: channel)
+    host.poll
+    assert_equal "", host.poll
+    channel.push(type: "snapshot", snapshot: Fixtures.snapshot, local: true)
+    refute_equal "", host.poll, "a snapshot is drawn right away, not on the next 2s tick"
+    assert_equal 2, host.store.sessions.size
+  end
 end

@@ -71,7 +71,7 @@ module BotOps
     # snapshots from bin/bot-ops-agent on other machines. Each snapshot becomes
     # one { type: "snapshot" } event for Store#apply.
     class ClaudeChannel < Channel
-      POLL_S = 2
+      POLL_S = 1
 
       attr_reader :collector, :collector_error
 

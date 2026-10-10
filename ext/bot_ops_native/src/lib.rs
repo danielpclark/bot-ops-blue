@@ -18,7 +18,7 @@
 //! handed to Ruby via host.resize so the panels stretch to fill the window.
 
 use eframe::egui::{self, Align2, Color32, FontFamily, FontId, Key, Painter, Pos2, Rect, Rounding, Stroke, Vec2};
-use rutie::{AnyObject, Integer, Module, NilClass, Object, RString};
+use rutie::{AnyObject, Integer, Module, NilClass, Object, RString, Thread};
 use serde::Deserialize;
 use serde_json::Value;
 use std::time::Duration;
@@ -150,31 +150,36 @@ fn is_fullscreen(ctx: &egui::Context) -> bool {
 }
 
 impl HubApp {
-    fn poll_ruby(&mut self, ctx: &egui::Context) {
-        match self.host.protect_send("poll", &[]) {
-            Ok(obj) => {
-                if obj.is_nil() {
-                    return;
-                }
-                if let Ok(rs) = obj.try_convert_to::<RString>() {
-                    let json = rs.to_string();
-                    if json.is_empty() {
-                        return;
-                    }
-                    match serde_json::from_str::<Frame>(&json) {
-                        Ok(frame) => {
-                            self.hits_rects = frame
-                                .hits
-                                .iter()
-                                .map(|&(x, y, w, h, id)| (Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h)), id))
-                                .collect();
-                            self.frame = frame;
-                        }
-                        Err(e) => eprintln!("bot_ops_native: bad frame JSON: {e}"),
-                    }
-                }
+    /// Calls `host.<method>(*ints)` and returns its String result ("" for nil).
+    /// The window loop runs without the GVL so Ruby's own threads (the probe,
+    /// the collector) keep running; every touch of a Ruby object happens here,
+    /// with the GVL re-acquired.
+    fn call_host(&self, method: &str, ints: &[i64]) -> Result<String, ()> {
+        let host = &self.host;
+        Thread::call_with_gvl(|| {
+            let args: Vec<AnyObject> = ints.iter().map(|&i| Integer::new(i).to_any_object()).collect();
+            match host.protect_send(method, &args) {
+                Ok(obj) => Ok(obj.try_convert_to::<RString>().map(|s| s.to_string()).unwrap_or_default()),
+                Err(_) => Err(()),
             }
-            Err(_) => {
+        })
+    }
+
+    fn poll_ruby(&mut self, ctx: &egui::Context) {
+        match self.call_host("poll", &[]) {
+            Ok(json) if json.is_empty() => {}
+            Ok(json) => match serde_json::from_str::<Frame>(&json) {
+                Ok(frame) => {
+                    self.hits_rects = frame
+                        .hits
+                        .iter()
+                        .map(|&(x, y, w, h, id)| (Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h)), id))
+                        .collect();
+                    self.frame = frame;
+                }
+                Err(e) => eprintln!("bot_ops_native: bad frame JSON: {e}"),
+            },
+            Err(()) => {
                 eprintln!("bot_ops_native: Ruby raised in poll; closing window");
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
@@ -184,14 +189,9 @@ impl HubApp {
     fn handle_press(&mut self, ctx: &egui::Context, pos: Pos2) {
         let hit = self.hits_rects.iter().rev().find(|(r, _)| r.contains(pos)).map(|(_, id)| *id);
         if let Some(id) = hit {
-            let arg = Integer::new(id as i64).to_any_object();
-            match self.host.protect_send("hit", &[arg]) {
-                Ok(obj) => {
-                    if let Ok(cmd) = obj.try_convert_to::<RString>() {
-                        self.window_command(ctx, &cmd.to_string());
-                    }
-                }
-                Err(_) => eprintln!("bot_ops_native: Ruby raised in hit"),
+            match self.call_host("hit", &[id as i64]) {
+                Ok(cmd) => self.window_command(ctx, &cmd),
+                Err(()) => eprintln!("bot_ops_native: Ruby raised in hit"),
             }
             return;
         }
@@ -246,8 +246,7 @@ impl HubApp {
         let size = (window / zoom).floor();
         if size != self.laid_out {
             self.laid_out = size;
-            let args = [Integer::new(size.x as i64).to_any_object(), Integer::new(size.y as i64).to_any_object()];
-            if self.host.protect_send("resize", &args).is_err() {
+            if self.call_host("resize", &[size.x as i64, size.y as i64]).is_err() {
                 eprintln!("bot_ops_native: Ruby raised in resize");
             }
         }
@@ -393,23 +392,32 @@ rutie::methods!(
         }
         let start_fullscreen = matches!(std::env::var("BOT_OPS_FULLSCREEN").as_deref(), Ok("1") | Ok("true"));
         let options = eframe::NativeOptions { viewport, ..Default::default() };
-        let result = eframe::run_native(
-            &title,
-            options,
-            Box::new(move |cc| {
-                install_fonts(&cc.egui_ctx);
-                // Zoom is driven by fit_to_window; Cmd +/- would fight it.
-                cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
-                Ok(Box::new(HubApp {
-                    host,
-                    frame: Frame::default(),
-                    hits_rects: Vec::new(),
-                    design: Vec2::new(w, h),
-                    laid_out: Vec2::new(w, h),
-                    decorated: false,
-                    start_fullscreen,
-                }))
-            }),
+        // Run the window loop without the GVL: holding it here would starve
+        // every Ruby thread for as long as the window is open.
+        let mut once = Some((options, host));
+        let result = Thread::call_without_gvl(
+            move || {
+                let (options, host) = once.take().expect("window loop runs once");
+                eframe::run_native(
+                    &title,
+                    options,
+                    Box::new(move |cc| {
+                        install_fonts(&cc.egui_ctx);
+                        // Zoom is driven by fit_to_window; Cmd +/- would fight it.
+                        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
+                        Ok(Box::new(HubApp {
+                            host,
+                            frame: Frame::default(),
+                            hits_rects: Vec::new(),
+                            design: Vec2::new(w, h),
+                            laid_out: Vec2::new(w, h),
+                            decorated: false,
+                            start_fullscreen,
+                        }))
+                    }),
+                )
+            },
+            None::<fn()>,
         );
         if let Err(e) = result {
             eprintln!("bot_ops_native: window error: {e}");

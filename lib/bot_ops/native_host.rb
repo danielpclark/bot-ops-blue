@@ -44,9 +44,15 @@ module BotOps
     # Returns a JSON frame when something changed since the last poll, else "".
     # Only strings and integers cross the Rutie boundary (see README).
     def poll
+      # New data is applied as soon as it arrives (the probe reports every
+      # second); the periodic tick only keeps the clock and "Xm ago" current.
+      events = @channel.poll(@store)
+      unless events.empty?
+        @store.apply_all(events)
+        @dirty = true
+      end
       if Time.now - @last_tick >= Scene::REFRESH_SECONDS
         @last_tick = Time.now
-        @store.apply_all(@channel.poll(@store))
         @dirty = true
       end
       return "" unless @dirty

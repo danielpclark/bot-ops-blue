@@ -76,7 +76,7 @@ It sends nothing anywhere and changes no settings:
 | `sysctl`, `vm_stat`, `df` (macOS) or `/proc` (Linux) | load, memory, disk, uptime |
 
 Transcripts are tailed: the first scan reads the last 24 hours, then each
-two-second refresh reads only the lines appended since. These files are
+one-second refresh reads only the lines appended since. These files are
 Claude Code internals, not a published API, so every field is read
 defensively and a format change shows up as missing data, never as wrong
 data. `claude agents --json` lists the same live sessions if you want to
@@ -87,8 +87,8 @@ cross-check.
 `bin/bot-ops-hook` is a Claude Code command hook that appends
 SessionStart, SessionEnd, Notification and Stop events to
 `~/.claude/bot-ops/hooks.jsonl`. With it registered, a session blocked on a
-permission prompt shows **Needs you** (yellow, sorted first) within two
-seconds, and starts, ends and finished turns appear in the event log. It
+permission prompt shows **Needs you** (yellow, sorted first) within a
+second or two, and starts, ends and finished turns appear in the event log. It
 prints nothing, always exits 0 and caps its log at 2 MB. Register it yourself
 for those four events (for example with `/hooks`) as
 `ruby /path/to/bot-ops-blue/bin/bot-ops-hook`; the Settings page shows
