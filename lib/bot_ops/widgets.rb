@@ -67,17 +67,62 @@ module BotOps
     # A framed dashboard panel. The block draws the body with its origin at
     # the panel's top-left corner just below the title bar.
     def panel(x, y, w, h, opts = {})
-      @c.rect(x, y, w, h, curve: 7, fill: col(PANEL), stroke: col(EDGE), strokewidth: 1.5)
-      @c.line(x + 14, y + 1, x + w - 14, y + 1, stroke: col(CYAN, 0.45))
+      @c.rect(x, y, w, h, curve: 7, fill: col(PANEL))
+      electric_frame(x, y, w, h, curve: 7)
       if opts[:title]
         txt(opts[:title], x + 16, y + 11, size: 11, color: TEXT, weight: :bold, kerning: 1)
-        hline(x + 1, x + w - 1, y + Layout::PANEL_TITLE_H - 1, col(EDGE_SOFT, 0.6))
+        fade_line(x + 10, x + w - 10, y + Layout::PANEL_TITLE_H - 1, BOLT)
       end
       if opts[:right]
         rw = opts[:right_w] || 120
         txt(opts[:right], x + w - 16 - rw, y + 11, size: 10, color: opts[:right_color] || CYAN, width: rw, align: :right)
       end
       @c.group(x, y + Layout::PANEL_TITLE_H) { yield } if block_given?
+    end
+
+    # Lightning-style outline: a wide faint halo, a brighter glow, a bright
+    # electric core with a white-hot hairline, glowing corner brackets, and a
+    # jagged spark on the top and bottom edges. The sparks are seeded by
+    # position, so each frame has its own bolt and it never flickers.
+    def electric_frame(x, y, w, h, curve: 7)
+      @c.rect(x - 2, y - 2, w + 4, h + 4, curve: curve + 2, stroke: col(EDGE, 0.16), strokewidth: 7)
+      @c.rect(x - 0.5, y - 0.5, w + 1, h + 1, curve: curve + 0.5, stroke: col(BOLT, 0.35), strokewidth: 3)
+      @c.rect(x, y, w, h, curve: curve, stroke: col(BOLT), strokewidth: 1.4)
+      @c.rect(x, y, w, h, curve: curve, stroke: col(SPARK, 0.45), strokewidth: 0.5)
+
+      arm = [[w, h].min / 6, 22].min
+      [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + h, 1, -1], [x + w, y + h, -1, -1]].each do |cx, cy, sx, sy|
+        [[[cx + sx * curve, cy], [cx + sx * (curve + arm), cy]],
+         [[cx, cy + sy * curve], [cx, cy + sy * (curve + arm)]]].each do |(x1, y1), (x2, y2)|
+          @c.line(x1, y1, x2, y2, stroke: col(CYAN, 0.35), strokewidth: 4)
+          @c.line(x1, y1, x2, y2, stroke: col(SPARK, 0.95), strokewidth: 1.4)
+        end
+      end
+
+      rng = Random.new((x * 73 + y * 31 + w).to_i)
+      spark(x + w * (0.55 + rng.rand * 0.15), y, [w * 0.18, 140].min, rng)
+      spark(x + w * (0.08 + rng.rand * 0.15), y + h, [w * 0.12, 90].min, rng)
+    end
+
+    # A jagged bolt along a horizontal edge: glow first, then the hot core.
+    def spark(x, y, len, rng)
+      n = 9
+      pts = (0..n).map { |i| [x + len * i / n, y + (i.zero? || i == n ? 0 : (rng.rand * 5 - 2.5))] }
+      [[col(BOLT, 0.3), 4], [col(CYAN, 0.8), 1.6], [col(SPARK), 0.7]].each do |c, sw|
+        pts.each_cons(2) { |(x1, y1), (x2, y2)| @c.line(x1, y1, x2, y2, stroke: c, strokewidth: sw) }
+      end
+      @c.circle(pts.last[0], pts.last[1], 2.2, fill: col(SPARK, 0.9))
+      @c.circle(pts.last[0], pts.last[1], 5, fill: col(CYAN, 0.18))
+    end
+
+    # A divider that is brightest on the left and fades out to the right.
+    def fade_line(x1, x2, y, color_hex)
+      steps = 8
+      seg = (x2 - x1) / steps.to_f
+      steps.times do |i|
+        a = 0.55 * (1 - i / steps.to_f)**1.6
+        @c.line(x1 + seg * i, y, x1 + seg * (i + 1), y, stroke: col(color_hex, a), strokewidth: 1)
+      end
     end
 
     # ---- indicators ----------------------------------------------------

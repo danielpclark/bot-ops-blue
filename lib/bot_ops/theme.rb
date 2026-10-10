@@ -13,8 +13,10 @@ module BotOps
     TRACK   = "#0E2234"
     LINE    = "#113347"
 
-    EDGE      = "#0B3BF0" # deep electric royal armour: every frame outline
+    EDGE      = "#0B3BF0" # deep electric royal armour: frame glow
     EDGE_SOFT = "#0A2CB8" # the same, darker, for boxes inside a frame
+    BOLT      = "#3D82FF" # bright electric blue: the core of every frame line
+    SPARK     = "#C8F6FF" # white-hot eye core: hairlines, corners and sparks
 
     CYAN    = "#30C8FC"   # eye glow: the primary accent
     TEAL    = "#7FA8FF"   # periwinkle armour highlight: the secondary accent

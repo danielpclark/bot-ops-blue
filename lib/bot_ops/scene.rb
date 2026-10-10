@@ -45,8 +45,8 @@ module BotOps
       w = @width
       dx = w - Layout::WIDTH # right-hand header items stay pinned to the right edge
       hh = Layout::HEADER_H
-      @c.rect(12, 6, w - 24, hh - 12, curve: 8, fill: col(PANEL), stroke: col(EDGE), strokewidth: 1.5)
-      @c.line(60, 7, w - 60, 7, stroke: col(CYAN, 0.45))
+      @c.rect(12, 6, w - 24, hh - 12, curve: 8, fill: col(PANEL))
+      electric_frame(12, 6, w - 24, hh - 12, curve: 8)
 
       # logo: the bot portrait in a round, glowing frame like a profile photo
       @c.circle(60, 43, 33, fill: col(CYAN, 0.10))
@@ -102,7 +102,8 @@ module BotOps
       x = Layout::SIDEBAR_X
       w = Layout::SIDEBAR_W
       @c.group(x, Layout::CONTENT_Y) do
-        @c.rect(0, 0, w, Layout.content_h(@height), curve: 8, fill: col(PANEL), stroke: col(EDGE), strokewidth: 1.5)
+        @c.rect(0, 0, w, Layout.content_h(@height), curve: 8, fill: col(PANEL))
+        electric_frame(0, 0, w, Layout.content_h(@height), curve: 8)
         Layout::NAV.each_with_index do |(key, name, glyph), i|
           y = 6 + i * 62
           active = @store.page == key
