@@ -168,6 +168,7 @@ name = "bot_ops_native"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "image",
  "rutie",
  "serde",
  "serde_json",

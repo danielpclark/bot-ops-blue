@@ -70,8 +70,8 @@ module BotOps
       status_pill(mid, y + 6, status_label(s))
       txt(Store.model_name(s["model"]), mid, y + 22, size: 9, color: ended ? DIM : MUTED)
       txt("#{s['tool_calls'].to_i} tools", w - 100, y + 5, size: 9, color: ended ? MUTED : TEXT, width: 88, align: :right)
-      # Last activity, which is also what the list is sorted by.
-      txt(Store.ago(s["last_at"] || s["status_at"]), w - 100, y + 21, size: 9, color: MUTED, width: 88, align: :right)
+      # When you last prompted it, which is what the list is sorted by.
+      txt(Store.ago(Store.worked_at(s)), w - 100, y + 21, size: 9, color: MUTED, width: 88, align: :right)
       @c.hit(4, y, w - 8, row_h) { select_session(s["id"]) }
     end
 

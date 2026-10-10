@@ -37,6 +37,15 @@ class SceneTest < Minitest::Test
     assert_equal 4, c.count(:wedge), "four health gauges"
   end
 
+  def test_header_logo_is_the_bot_portrait_in_a_round_frame
+    c = canvas
+    logo = c.cmds.find { |cmd| cmd.op == :image }
+    assert_equal ["logo", 60, 43, 28], logo.a
+    assert_includes JSON.parse(c.to_json)["cmds"], ["i", "logo", 60, 43, 28]
+    assert_includes c.to_svg, "data:image/png;base64,", "previews embed the same image"
+    assert File.exist?(File.join(BotOps::Canvas::IMAGE_DIR, "logo.png"))
+  end
+
   def test_empty_store_shows_empty_states_not_filler
     c = BotOps::Scene.new(BotOps::Store.new, @host).build
     assert_includes c.texts, "Reading Claude Code sessions…"

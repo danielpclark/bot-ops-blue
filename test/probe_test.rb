@@ -134,6 +134,15 @@ class StoreTest < Minitest::Test
     assert_equal "Just finished", BotOps::Store.display_name(store.all_sessions[1])
   end
 
+  def test_sessions_follow_your_last_prompt_not_their_own_tool_calls
+    now = Time.now.to_f
+    snap = Fixtures.snapshot(now: now)
+    snap["sessions"][0].merge!("prompt_at" => now - 900, "last_at" => now - 1)  # busy, but prompted 15m ago
+    snap["sessions"][1].merge!("prompt_at" => now - 120, "last_at" => now - 100) # idle, prompted 2m ago
+    store = BotOps::Store.new.apply(type: "snapshot", snapshot: snap, local: true)
+    assert_equal %w[s-idle s-busy], store.all_sessions.map { |s| s["id"] }
+  end
+
   def test_formatting
     assert_equal "12.4k", BotOps::Store.count(12_400)
     assert_equal "3.1M", BotOps::Store.count(3_100_000)

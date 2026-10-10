@@ -92,7 +92,7 @@ module BotOps
         "status_at" => ms(s["statusUpdatedAt"] || s["updatedAt"]),
         "version" => s["version"]
       }.merge(t.slice("model", "title", "last_prompt", "branch", "tokens", "context",
-                      "tool_calls", "errors", "prompts", "last_tool", "last_at"))
+                      "tool_calls", "errors", "prompts", "last_tool", "last_at", "prompt_at"))
        .merge(attention(s["sessionId"], t["last_at"]))
     end
 
@@ -277,7 +277,7 @@ module BotOps
                  .first(40)
                  .map do |s|
                    s.slice("id", "cwd", "entrypoint", "version", "model", "title", "last_prompt", "branch", "tokens",
-                           "context", "tool_calls", "errors", "prompts", "last_tool", "last_at")
+                           "context", "tool_calls", "errors", "prompts", "last_tool", "last_at", "prompt_at")
                     .merge("name" => s["title"] || File.basename(s["cwd"].to_s), "status" => "ended")
                  end
       end
@@ -400,6 +400,7 @@ module BotOps
         text = text.to_s
         return if text.strip.empty? || text.lstrip.start_with?("<")
         s["prompts"] += 1
+        s["prompt_at"] = [s["prompt_at"].to_f, at].max if at
         return unless recent
         bucket(s, at)[2] += 1
         event(s, at, "prompt", "prompt", one_line(text))

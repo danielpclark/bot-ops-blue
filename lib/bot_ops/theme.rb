@@ -4,25 +4,27 @@ module BotOps
   # Colour palette and typography for the hub. Hex strings are accepted
   # directly by Shoes 3 for stroke/fill; use Theme.rgba for translucent colours.
   module Theme
-    BG      = "#050B14"
-    PANEL   = "#07131F"
-    PANEL2  = "#0A1A2A"
-    TRACK   = "#0E2234"
-    LINE    = "#113347"
+    # Sampled from assets/bot-blue.png (the logo): deep-space navy, royal
+    # armour blues, the glowing cyan eyes, ice-white plating and the gold crest.
+    BG      = "#030519"   # space behind the robot
+    PANEL   = "#060D2C"
+    PANEL2  = "#0A1642"
+    TRACK   = "#0F2160"
+    LINE    = "#16308A"
 
-    CYAN    = "#00E5FF"
-    TEAL    = "#00FFB2"
-    BLUE    = "#3B82F6"
-    PURPLE  = "#A855F7"
-    PINK    = "#FF4FD8"
-    YELLOW  = "#F5C518"
-    ORANGE  = "#FF8A3D"
-    RED     = "#FF3B5C"
-    GREEN   = "#22E07A"
+    CYAN    = "#30C8FC"   # eye glow: the primary accent
+    TEAL    = "#7FA8FF"   # periwinkle armour highlight: the secondary accent
+    BLUE    = "#2F6BFF"   # electric royal blue armour
+    PURPLE  = "#8C8CFF"   # blue-violet shadow plating
+    PINK    = "#B7FCFD"   # white-hot eye core
+    YELLOW  = "#F0B23C"   # gold crest
+    ORANGE  = "#C9852E"   # darker crest gold
+    RED     = "#FF4D6A"
+    GREEN   = "#3CF0B4"
 
-    TEXT    = "#DCE8F0"
-    MUTED   = "#7C94A6"
-    DIM     = "#3C5566"
+    TEXT    = "#E8F0FB"   # ice-white plating
+    MUTED   = "#8EA0D6"
+    DIM     = "#3A4C86"
 
     FAMILY  = "Sans"
     MONO    = "Monospace"

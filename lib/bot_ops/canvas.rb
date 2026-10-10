@@ -10,6 +10,8 @@ module BotOps
   # SVG exporter below for tests and previews) then replays the commands.
   class Canvas
     Cmd = Struct.new(:op, :a)
+    # Images are referred to by name; the native host embeds the same files.
+    IMAGE_DIR = File.expand_path("../../ext/bot_ops_native/assets", __dir__)
     Hit = Struct.new(:x, :y, :w, :h, :handler)
 
     attr_reader :cmds, :hits, :width, :height
@@ -58,6 +60,11 @@ module BotOps
       @cmds << Cmd.new(:area, [pts, @oy + base_y, fill])
     end
 
+    # Named image (ext/bot_ops_native/assets/<name>.png) clipped to a circle.
+    def image_circle(name, cx, cy, r)
+      @cmds << Cmd.new(:image, [name.to_s, @ox + cx, @oy + cy, r])
+    end
+
     def text(str, x, y, size:, color:, weight: :normal, family: :sans, width: nil, align: :left, kerning: 0)
       @cmds << Cmd.new(:text, [str.to_s, @ox + x, @oy + y, size, color, weight, family, width, align, kerning])
     end
@@ -87,7 +94,7 @@ module BotOps
 
     # ---- frame export for the native host ----------------------------------
 
-    OPS = { rect: "r", circle: "c", line: "l", wedge: "w", area: "a", text: "t" }.freeze
+    OPS = { rect: "r", circle: "c", line: "l", wedge: "w", area: "a", text: "t", image: "i" }.freeze
 
     # Compact JSON understood by ext/bot_ops_native (see src/lib.rs).
     def to_frame(drag: nil)
@@ -127,6 +134,14 @@ module BotOps
           pts, base, f = c.a
           poly = [[pts.first[0], base]] + pts + [[pts.last[0], base]]
           out << %(<polygon points="#{poly.map { |p| p.join(',') }.join(' ')}" fill="#{svg_c(f)}"/>)
+        when :image
+          name, cx, cy, r = c.a
+          path = File.join(IMAGE_DIR, "#{name}.png")
+          next unless File.exist?(path)
+          id = "clip-#{name}-#{cx.round}-#{cy.round}"
+          out << %(<clipPath id="#{id}"><circle cx="#{cx}" cy="#{cy}" r="#{r}"/></clipPath>)
+          out << %(<image x="#{cx - r}" y="#{cy - r}" width="#{r * 2}" height="#{r * 2}" clip-path="url(##{id})" ) +
+                 %(href="data:image/png;base64,#{[File.binread(path)].pack("m0")}"/>)
         when :text
           str, x, y, size, color, weight, family, width, align, kerning = c.a
           anchor = { left: "start", center: "middle", right: "end" }[align]

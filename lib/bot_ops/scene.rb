@@ -48,10 +48,11 @@ module BotOps
       @c.rect(12, 6, w - 24, hh - 12, curve: 8, fill: col(PANEL), stroke: col(CYAN, 0.3))
       @c.line(60, 7, w - 60, 7, stroke: col(CYAN, 0.45))
 
-      # logo
-      @c.circle(58, 44, 22, fill: col(CYAN, 0.08), stroke: col(CYAN, 0.9))
-      @c.circle(58, 44, 14, stroke: col(CYAN, 0.5))
-      txt("⌘", 36, 34, size: 14, color: CYAN, width: 44, align: :center)
+      # logo: the bot portrait in a round, glowing frame like a profile photo
+      @c.circle(60, 43, 33, fill: col(CYAN, 0.10))
+      @c.image_circle("logo", 60, 43, 28)
+      @c.circle(60, 43, 28.5, stroke: col(CYAN, 0.95), strokewidth: 2)
+      @c.circle(60, 43, 32, stroke: col(BLUE, 0.45))
 
       txt("BOT OPS BLUE", 108, 22, size: 20, color: CYAN, weight: :bold, kerning: 3)
       txt("AUTOMATE   /   CREATE   /   SCALE", 110, 52, size: 9, color: MUTED, kerning: 2)

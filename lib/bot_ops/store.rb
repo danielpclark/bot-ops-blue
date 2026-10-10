@@ -110,14 +110,20 @@ module BotOps
       end
     end
 
-    # Live and earlier sessions in one list: whatever was worked on most
-    # recently is on top, except that a session waiting on you comes first.
+    # Live and earlier sessions in one list, ordered like Recent Prompts: the
+    # session you last prompted is on top (a busy session's own tool calls
+    # don't keep it there), except that a session waiting on you comes first.
     def all_sessions
       cached(:all_sessions) { Store.by_recency(sessions + recent_sessions) }
     end
 
     def self.by_recency(list)
-      list.sort_by { |s| [s["attention"] ? 0 : 1, -(s["last_at"] || s["status_at"]).to_f] }
+      list.sort_by { |s| [s["attention"] ? 0 : 1, -worked_at(s).to_f] }
+    end
+
+    # When you last worked with a session: its last prompt, else its last activity.
+    def self.worked_at(s)
+      s["prompt_at"] || s["last_at"] || s["status_at"]
     end
 
     # What a session is working on (its AI title), else its process nickname.

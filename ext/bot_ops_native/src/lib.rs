@@ -21,6 +21,8 @@ use eframe::egui::{self, Align2, Color32, FontFamily, FontId, Key, Painter, Pos2
 use rutie::{AnyObject, Integer, Module, NilClass, Object, RString, Thread};
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Deserialize, Default)]
@@ -35,6 +37,8 @@ struct Frame {
 
 struct HubApp {
     host: AnyObject,
+    /// Named images Ruby can draw with "i" commands (see IMAGES).
+    textures: HashMap<String, egui::TextureHandle>,
     frame: Frame,
     hits_rects: Vec<(Rect, u32)>,
     /// Minimum size Ruby lays out for, in points.
@@ -47,7 +51,12 @@ struct HubApp {
     start_fullscreen: bool,
 }
 
-const BACKGROUND: Color32 = Color32::from_rgb(5, 11, 20);
+/// Images Ruby can draw by name, embedded at build time. lib/bot_ops/canvas.rb
+/// reads the same files for SVG previews.
+const IMAGES: &[(&str, &[u8])] = &[("logo", include_bytes!("../assets/logo.png"))];
+const ICON_PNG: &[u8] = include_bytes!("../assets/icon.png");
+
+const BACKGROUND: Color32 = Color32::from_rgb(3, 5, 25); // Theme::BG
 
 // ---- helpers ---------------------------------------------------------------
 
@@ -141,6 +150,44 @@ fn install_fonts(ctx: &egui::Context) {
         vec!["DejaVuSans-Bold".to_owned(), "DejaVuSans".to_owned()],
     );
     ctx.set_fonts(fonts);
+}
+
+// ---- images ----------------------------------------------------------------
+
+fn decode_png(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    let img = image::load_from_memory_with_format(bytes, image::ImageFormat::Png).ok()?.to_rgba8();
+    Some((img.width(), img.height(), img.into_raw()))
+}
+
+fn load_textures(ctx: &egui::Context) -> HashMap<String, egui::TextureHandle> {
+    IMAGES
+        .iter()
+        .filter_map(|(name, bytes)| {
+            let (w, h, rgba) = decode_png(bytes)?;
+            let img = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
+            Some((name.to_string(), ctx.load_texture(*name, img, egui::TextureOptions::LINEAR)))
+        })
+        .collect()
+}
+
+// A texture mapped onto a disc (a triangle fan), for the round portrait.
+fn image_circle_mesh(tex: egui::TextureId, c: Pos2, r: f32) -> egui::Shape {
+    use egui::epaint::{Mesh, Vertex};
+    let steps = 96u32;
+    let mut mesh = Mesh::with_texture(tex);
+    mesh.vertices.push(Vertex { pos: c, uv: egui::pos2(0.5, 0.5), color: Color32::WHITE });
+    for i in 0..=steps {
+        let (sin, cos) = (i as f32 / steps as f32 * std::f32::consts::TAU).sin_cos();
+        mesh.vertices.push(Vertex {
+            pos: Pos2::new(c.x + r * cos, c.y + r * sin),
+            uv: egui::pos2(0.5 + 0.5 * cos, 0.5 + 0.5 * sin),
+            color: Color32::WHITE,
+        });
+    }
+    for i in 1..=steps {
+        mesh.indices.extend_from_slice(&[0, i, i + 1]);
+    }
+    egui::Shape::mesh(mesh)
 }
 
 // ---- app -------------------------------------------------------------------
@@ -296,6 +343,12 @@ impl HubApp {
                         painter.add(area_mesh(&pts, num(cmd, 2), f));
                     }
                 }
+                "i" => {
+                    // ["i", name, cx, cy, r]
+                    if let Some(tex) = self.textures.get(text(cmd, 1)) {
+                        painter.add(image_circle_mesh(tex.id(), Pos2::new(num(cmd, 2), num(cmd, 3)), num(cmd, 4)));
+                    }
+                }
                 "t" => {
                     // ["t", str, x, y, size, color, weight, family, width, align, kerning]
                     let family = match (text(cmd, 7), text(cmd, 6)) {
@@ -390,6 +443,9 @@ rutie::methods!(
         if let Some((x, y)) = position {
             viewport = viewport.with_position([x, y]);
         }
+        if let Some((iw, ih, rgba)) = decode_png(ICON_PNG) {
+            viewport = viewport.with_icon(Arc::new(egui::IconData { rgba, width: iw, height: ih }));
+        }
         let start_fullscreen = matches!(std::env::var("BOT_OPS_FULLSCREEN").as_deref(), Ok("1") | Ok("true"));
         let options = eframe::NativeOptions { viewport, ..Default::default() };
         // Run the window loop without the GVL: holding it here would starve
@@ -407,6 +463,7 @@ rutie::methods!(
                         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
                         Ok(Box::new(HubApp {
                             host,
+                            textures: load_textures(&cc.egui_ctx),
                             frame: Frame::default(),
                             hits_rects: Vec::new(),
                             design: Vec2::new(w, h),
