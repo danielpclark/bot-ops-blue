@@ -22,6 +22,7 @@ use rutie::{AnyObject, Integer, Module, NilClass, Object, RString, Thread};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::os::raw::c_void;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -485,6 +486,50 @@ impl eframe::App for HubApp {
 
 // ---- Ruby binding -----------------------------------------------------------
 
+extern "C" {
+    fn rb_thread_call_without_gvl(
+        func: extern "C" fn(*mut c_void) -> *mut c_void,
+        data1: *mut c_void,
+        ubf: extern "C" fn(*mut c_void),
+        data2: *mut c_void,
+    ) -> *mut c_void;
+}
+
+/// Runs `f` without the GVL; Ruby calls `on_unblock` (from another thread,
+/// possibly several times) when it wants this thread back, e.g. on SIGTERM.
+///
+/// Calls rb_thread_call_without_gvl directly: rutie 0.13's wrapper frees its
+/// unblock closure after the first call, so a second call (Ruby retries
+/// interrupts) used freed memory and crashed in the timer thread, which then
+/// deadlocked against this one.
+fn without_gvl<F: FnOnce() -> R, R>(f: F, on_unblock: &(dyn Fn() + Sync)) -> R {
+    struct Call<F, R> {
+        f: Option<F>,
+        out: Option<R>,
+    }
+    extern "C" fn run<F: FnOnce() -> R, R>(data: *mut c_void) -> *mut c_void {
+        let call = unsafe { &mut *(data as *mut Call<F, R>) };
+        if let Some(f) = call.f.take() {
+            call.out = Some(f());
+        }
+        std::ptr::null_mut()
+    }
+    extern "C" fn unblock(data: *mut c_void) {
+        let cb = unsafe { &*(data as *const &(dyn Fn() + Sync)) };
+        cb();
+    }
+    let mut call = Call { f: Some(f), out: None };
+    unsafe {
+        rb_thread_call_without_gvl(
+            run::<F, R>,
+            &mut call as *mut Call<F, R> as *mut c_void,
+            unblock,
+            &on_unblock as *const &(dyn Fn() + Sync) as *mut c_void,
+        );
+    }
+    call.out.expect("the window loop ran")
+}
+
 rutie::class!(BotOpsNativeClass);
 
 rutie::methods!(
@@ -529,7 +574,7 @@ rutie::methods!(
                 ctx.request_repaint();
             }
         };
-        let result = Thread::call_without_gvl(
+        let result = without_gvl(
             move || {
                 let (options, host) = once.take().expect("window loop runs once");
                 let ctx_for_loop = Arc::clone(&ctx_for_loop);
@@ -560,7 +605,7 @@ rutie::methods!(
                     }),
                 )
             },
-            Some(unblock),
+            &unblock,
         );
         if let Err(e) = result {
             eprintln!("bot_ops_native: window error: {e}");
