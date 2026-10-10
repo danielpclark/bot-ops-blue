@@ -82,12 +82,15 @@ class SceneTest < Minitest::Test
     assert_equal [:minimize, :toggle_fullscreen, :quit], @host.actions
   end
 
-  # macOS reveals its menu bar over the top ~25pt of a fullscreen window and
-  # takes clicks there, so the controls must sit below it.
-  def test_window_controls_sit_below_the_fullscreen_menu_bar_and_follow_the_right_edge
-    @scene.window_controls.each { |_, _, y, _| assert_operator y, :>=, 30 }
+  # Tiny controls at the top right; macOS reveals its menu bar over the top
+  # ~25pt of a fullscreen window and takes clicks there, so in fullscreen
+  # they drop below it.
+  def test_window_controls_sit_top_right_and_below_the_menu_bar_in_fullscreen
+    @scene.window_controls.each { |_, _, y, s| assert_operator y + s, :<=, 20 }
+    @host.fullscreen = true
+    @scene.window_controls.each { |_, _, y, _| assert_operator y - 5, :>=, 30 }
     @scene.resize(1820, 1024)
-    assert_equal 1820 - 1536 + 1492, @scene.window_controls.last[1]
+    assert_equal 1820 - 1536 + 1506, @scene.window_controls.last[1]
   end
 
   def test_fullscreen_control_shows_what_a_click_will_do
@@ -124,7 +127,7 @@ class FrameTest < Minitest::Test
     host = BotOps::NativeHost.new(channel: channel)
     frame = JSON.parse(host.poll)
     assert_equal "", host.poll, "nothing changed, so no new frame"
-    quit_hit = frame["hits"].find { |h| h[0] == 1492 && h[1] == 30 } # top-right quit control
+    quit_hit = frame["hits"].find { |h| h[0] == 1501 && h[1] == 4 } # top-right quit control
     assert_equal "quit", host.hit(quit_hit[4])
     page_hit = frame["hits"].find { |h| h[0] < 90 && h[1] > 150 && h[1] < 220 } # sidebar "Sessions"
     assert_equal "", host.hit(page_hit[4])
