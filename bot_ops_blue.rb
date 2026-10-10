@@ -7,9 +7,8 @@
 #   bundle exec rake setup   # bundle install + cargo build (needs Rust)
 #   bundle exec rake run
 #
-# The window has no OS title bar: drag the header to move it, use the three
-# glyphs in the top-right corner to restore the title bar, go fullscreen, or
-# quit. Data is live: BotOps::Probe reads this machine's Claude Code sessions,
+# The window has no OS title bar: drag the header to move it, and use the
+# header's three buttons to minimize, enter or leave fullscreen, or quit. Data is live: BotOps::Probe reads this machine's Claude Code sessions,
 # and bin/bot-ops-agent reports other machines to the collector (see README).
 
 APP_ROOT = File.expand_path(File.dirname(__FILE__)) unless defined?(APP_ROOT)

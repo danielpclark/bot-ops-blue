@@ -76,18 +76,33 @@ class SceneTest < Minitest::Test
     end
   end
 
-  def test_header_window_controls
-    c = canvas
-    click_text(c, "▣")
-    click_text(c, "⤢")
-    click_text(c, "✕")
-    assert_equal [:toggle_decorations, :toggle_fullscreen, :quit], @host.actions
+  def test_header_window_controls_minimize_toggle_fullscreen_and_quit
+    canvas
+    @scene.window_controls.each { |_, x, y, s| assert @scene.click(x + s / 2, y + s / 2) }
+    assert_equal [:minimize, :toggle_fullscreen, :quit], @host.actions
+  end
+
+  # macOS reveals its menu bar over the top ~25pt of a fullscreen window and
+  # takes clicks there, so the controls must sit below it.
+  def test_window_controls_sit_below_the_fullscreen_menu_bar_and_follow_the_right_edge
+    @scene.window_controls.each { |_, _, y, _| assert_operator y, :>=, 30 }
+    @scene.resize(1820, 1024)
+    assert_equal 1820 - 1536 + 1492, @scene.window_controls.last[1]
+  end
+
+  def test_fullscreen_control_shows_what_a_click_will_do
+    lines = -> { canvas.cmds.count { |c| c.op == :line } }
+    out = lines.call
+    @host.fullscreen = true
+    assert_equal out, lines.call, "same number of strokes"
+    refute_equal canvas.to_svg, (@host.fullscreen = false; canvas.to_svg), "but drawn differently"
   end
 
   def test_header_drag_region_excludes_controls
     canvas
+    _, x, y, s = @scene.window_controls.last
     assert @scene.drag_region?(300, 30)
-    refute @scene.drag_region?(1505, 12), "quit glyph is a button, not a drag handle"
+    refute @scene.drag_region?(x + s / 2, y + s / 2), "the quit control is a button, not a drag handle"
     refute @scene.drag_region?(300, 300)
   end
 end
@@ -109,7 +124,7 @@ class FrameTest < Minitest::Test
     host = BotOps::NativeHost.new(channel: channel)
     frame = JSON.parse(host.poll)
     assert_equal "", host.poll, "nothing changed, so no new frame"
-    quit_hit = frame["hits"].find { |h| h[1] < 30 && h[0] > 1495 } # top-right "x" glyph
+    quit_hit = frame["hits"].find { |h| h[0] == 1492 && h[1] == 30 } # top-right quit control
     assert_equal "quit", host.hit(quit_hit[4])
     page_hit = frame["hits"].find { |h| h[0] < 90 && h[1] > 150 && h[1] < 220 } # sidebar "Sessions"
     assert_equal "", host.hit(page_hit[4])
@@ -119,6 +134,12 @@ class FrameTest < Minitest::Test
     assert_equal 1820, JSON.parse(host.poll)["drag"][2], "resize lays out at the new width"
     host.toggle_fullscreen
     assert_equal "fullscreen:toggle", host.hit(-1)
+    host.minimize
+    assert_equal "minimize", host.hit(-1)
+    refute host.fullscreen?
+    host.fullscreen_changed(1)
+    assert host.fullscreen?
+    refute_equal "", host.poll, "a fullscreen change redraws the header"
   end
 
   def test_native_host_applies_new_data_on_the_next_frame

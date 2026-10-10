@@ -49,6 +49,13 @@ struct HubApp {
     /// BOT_OPS_FULLSCREEN=1: go fullscreen once the window is placed, so it
     /// fills the monitor it was positioned on rather than the main one.
     start_fullscreen: bool,
+    /// Fullscreen state last reported to Ruby (host.fullscreen_changed).
+    reported_fullscreen: Option<bool>,
+    /// "minimize" from fullscreen: leave fullscreen first, then minimize
+    /// once the exit animation has finished (macOS can't minimize a
+    /// fullscreen window). Time (egui seconds) to minimize at, once known.
+    minimize_pending: bool,
+    minimize_at: Option<f64>,
 }
 
 /// Images Ruby can draw by name, embedded at build time. lib/bot_ops/canvas.rb
@@ -257,6 +264,14 @@ impl HubApp {
     fn window_command(&mut self, ctx: &egui::Context, cmd: &str) {
         match cmd {
             "quit" => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            "minimize" => {
+                if is_fullscreen(ctx) {
+                    self.minimize_pending = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                } else {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                }
+            }
             "fullscreen:toggle" => ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen(ctx))),
             "decorations:toggle" => {
                 self.decorated = !self.decorated;
@@ -266,8 +281,32 @@ impl HubApp {
         }
     }
 
-    // Esc leaves fullscreen; F11 or Ctrl+Cmd+F toggles it. The header glyph sits
-    // where macOS reveals its menu bar in fullscreen, so keys are the sure way out.
+    // Tells Ruby when fullscreen starts or ends (so the header's control can
+    // show what it will do), and finishes a minimize that had to leave
+    // fullscreen first.
+    fn sync_window_state(&mut self, ctx: &egui::Context) {
+        let fullscreen = is_fullscreen(ctx);
+        if self.reported_fullscreen != Some(fullscreen) {
+            self.reported_fullscreen = Some(fullscreen);
+            if self.call_host("fullscreen_changed", &[fullscreen as i64]).is_err() {
+                eprintln!("bot_ops_native: Ruby raised in fullscreen_changed");
+            }
+        }
+        if self.minimize_pending && !fullscreen {
+            let now = ctx.input(|i| i.time);
+            let at = *self.minimize_at.get_or_insert(now + 0.8);
+            if now >= at {
+                self.minimize_pending = false;
+                self.minimize_at = None;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            } else {
+                ctx.request_repaint_after(Duration::from_secs_f64(at - now));
+            }
+        }
+    }
+
+    // Esc leaves fullscreen; F11 or Ctrl+Cmd+F toggles it, as well as the
+    // header's fullscreen control.
     fn handle_keys(&mut self, ctx: &egui::Context) {
         let (esc, toggle) = ctx.input(|i| {
             let ctrl_cmd_f = i.modifiers.ctrl && i.modifiers.mac_cmd && i.key_pressed(Key::F);
@@ -398,6 +437,7 @@ impl eframe::App for HubApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
         }
         self.fit_to_window(ctx);
+        self.sync_window_state(ctx);
         self.handle_keys(ctx);
         self.poll_ruby(ctx);
 
@@ -470,6 +510,9 @@ rutie::methods!(
                             laid_out: Vec2::new(w, h),
                             decorated: false,
                             start_fullscreen,
+                            reported_fullscreen: None,
+                            minimize_pending: false,
+                            minimize_at: None,
                         }))
                     }),
                 )

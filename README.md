@@ -55,8 +55,9 @@ BOT_OPS_DISPLAY=main bundle exec rake run
 `BOT_OPS_FULLSCREEN=1` starts fullscreen on that monitor.
 
 The window opens without an OS title bar. Drag the header bar to move it.
-The three glyphs in the top-right corner restore the title bar, toggle
-fullscreen, and quit. The same controls live on the **Settings** page.
+The three buttons at the right of the header minimize (leaving fullscreen
+first if needed), enter or leave fullscreen, and quit. The **Settings** page
+has the same controls plus a title-bar toggle.
 In fullscreen macOS slides its menu bar over the top edge, so use the keys:
 **Esc** leaves fullscreen, **F11** or **Ctrl+Cmd+F** toggles it.
 

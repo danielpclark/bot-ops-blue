@@ -78,13 +78,60 @@ module BotOps
       txt(status, dx + 1150, 28, size: 9, color: ok ? GREEN : (online.zero? ? YELLOW : RED), weight: :bold)
       txt(clock_text, dx + 1150, 48, size: 9, color: TEXT)
       vline(dx + 1312, 20, hh - 20, col(CYAN, 0.25))
-      txt(@store.collector_status, dx + 1330, 22, size: 9, color: TEAL, width: 128)
+      txt(@store.collector_status, dx + 1330, 22, size: 9, color: TEAL, width: 90)
+      draw_window_controls
+    end
 
-      # window controls (a borderless window has none of its own)
-      [["▣", 1468, :toggle_decorations], ["⤢", 1486, :toggle_fullscreen], ["✕", 1504, :quit]].each do |glyph, bx, action|
-        txt(glyph, dx + bx, 8, size: 9, color: MUTED, width: 14, align: :center)
-        @c.hit(dx + bx - 3, 4, 20, 20) { @host.send(action) }
+    # ---- window controls -------------------------------------------------
+    #
+    # A borderless window has none of its own. They sit at the header's
+    # middle, below the strip where macOS slides its menu bar down in
+    # fullscreen (which used to swallow clicks on them), and are drawn as
+    # shapes rather than font glyphs.
+
+    CONTROL_SIZE = 26
+    CONTROLS = [[:minimize, 1428], [:toggle_fullscreen, 1460], [:quit, 1492]].freeze
+
+    # [[action, x, y, size], ...] in window coordinates.
+    def window_controls
+      dx = @width - Layout::WIDTH
+      CONTROLS.map { |action, x| [action, dx + x, 30, CONTROL_SIZE] }
+    end
+
+    def draw_window_controls
+      window_controls.each do |action, x, y, s|
+        color = action == :quit ? RED : TEXT
+        @c.rect(x, y, s, s, curve: 6, fill: col(PANEL2), stroke: col(action == :quit ? RED : EDGE_SOFT, 0.8))
+        send("icon_#{action}", x, y, s, col(color, 0.9))
+        @c.hit(x, y, s, s) { @host.send(action) }
       end
+    end
+
+    def icon_minimize(x, y, s, c)
+      @c.line(x + 8, y + s / 2.0 + 4, x + s - 8, y + s / 2.0 + 4, stroke: c, strokewidth: 2)
+    end
+
+    # Corner brackets: at the corners pointing in to go fullscreen, pulled
+    # toward the middle and pointing out to leave it.
+    def icon_toggle_fullscreen(x, y, s, c)
+      inward = @host.respond_to?(:fullscreen?) && @host.fullscreen?
+      l = 4.0
+      [[x + 7, y + 7, 1, 1], [x + s - 7, y + 7, -1, 1], [x + 7, y + s - 7, 1, -1], [x + s - 7, y + s - 7, -1, -1]].each do |cx, cy, sx, sy|
+        if inward
+          px = cx + sx * l
+          py = cy + sy * l
+          @c.line(px, py, cx, py, stroke: c, strokewidth: 2)
+          @c.line(px, py, px, cy, stroke: c, strokewidth: 2)
+        else
+          @c.line(cx, cy, cx + sx * l, cy, stroke: c, strokewidth: 2)
+          @c.line(cx, cy, cx, cy + sy * l, stroke: c, strokewidth: 2)
+        end
+      end
+    end
+
+    def icon_quit(x, y, s, c)
+      @c.line(x + 8, y + 8, x + s - 8, y + s - 8, stroke: c, strokewidth: 2)
+      @c.line(x + s - 8, y + 8, x + 8, y + s - 8, stroke: c, strokewidth: 2)
     end
 
     def clock_text
@@ -220,6 +267,10 @@ module BotOps
     end
 
     def invalidate; @invalidations += 1; end
+    attr_accessor :fullscreen
+
+    def minimize; @actions << :minimize; end
+    def fullscreen?; @fullscreen ? true : false; end
     def toggle_decorations; @actions << :toggle_decorations; end
     def toggle_fullscreen; @actions << :toggle_fullscreen; end
     def quit; @actions << :quit; end

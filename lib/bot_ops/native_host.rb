@@ -18,6 +18,7 @@ module BotOps
       @canvas = nil
       @dirty = true
       @pending = nil
+      @fullscreen = false
       @last_tick = Time.now
     end
 
@@ -83,7 +84,22 @@ module BotOps
       @dirty = true
     end
 
-    # The native side owns window state and toggles against it.
+    # The native side owns window state and toggles against it; it reports
+    # fullscreen changes back so the header can show the right control.
+    def fullscreen_changed(on)
+      @fullscreen = on.to_i == 1
+      @dirty = true
+      nil
+    end
+
+    def fullscreen?
+      @fullscreen
+    end
+
+    def minimize
+      @pending = "minimize"
+    end
+
     def toggle_decorations
       @pending = "decorations:toggle"
     end
