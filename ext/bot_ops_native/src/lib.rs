@@ -226,6 +226,28 @@ fn place_window(cc: &eframe::CreationContext<'_>, left: f64, top: f64) {
     window.setFrameTopLeftPoint(NSPoint::new(left, primary_height - top));
 }
 
+// ---- links -------------------------------------------------------------------
+
+/// Opens a cloud session's page in the default browser. Only
+/// https://claude.ai/code/<id> is accepted (Ruby checks the same), so a
+/// frame can never make the dashboard open anything else.
+fn open_session_url(url: &str) {
+    let id = url.strip_prefix("https://claude.ai/code/").unwrap_or("");
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        eprintln!("bot_ops_native: refusing to open {url:?}");
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    let opener = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(target_os = "windows")]
+    let opener = std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let opener = std::process::Command::new("xdg-open").arg(url).spawn();
+    if let Err(e) = opener {
+        eprintln!("bot_ops_native: could not open {url}: {e}");
+    }
+}
+
 // ---- app -------------------------------------------------------------------
 
 fn is_fullscreen(ctx: &egui::Context) -> bool {
@@ -302,6 +324,7 @@ impl HubApp {
     fn window_command(&mut self, ctx: &egui::Context, cmd: &str) {
         match cmd {
             "quit" => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            cmd if cmd.starts_with("open:") => open_session_url(&cmd["open:".len()..]),
             "minimize" => {
                 if is_fullscreen(ctx) {
                     self.minimize_pending = true;

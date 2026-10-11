@@ -223,3 +223,51 @@ class CloudIconTest < Minitest::Test
     assert_includes JSON.parse(c.to_json)["cmds"].map(&:first), "p"
   end
 end
+
+class CloudSessionLinkTest < Minitest::Test
+  TOKEN = "cloud-link-token-123456789"
+  SCRIPT = File.expand_path("../cloud/bot-ops-report.py", __dir__)
+
+  def report(env)
+    got = Queue.new
+    c = BotOps::Collector.new("127.0.0.1:0", TOKEN, on_event: ->(e) { got << e; true }) { |_| }.start
+    Open3.capture2({ "BOT_OPS_URL" => "http://#{c.address}", "BOT_OPS_TOKEN" => TOKEN, "CLAUDE_CODE_REMOTE" => "true" }.merge(env),
+                   "python3", SCRIPT, stdin_data: JSON.generate("session_id" => "s1", "hook_event_name" => "Stop"))
+    got.pop(timeout: 5)
+  ensure
+    c&.stop
+  end
+
+  def test_reporter_sends_the_session_page_from_the_remote_session_id
+    skip "python3 not installed" unless system("python3", "-c", "1", out: File::NULL, err: File::NULL)
+    assert_equal "https://claude.ai/code/session_01AbC", report("CLAUDE_CODE_REMOTE_SESSION_ID" => "cse_01AbC")["url"]
+    refute report("CLAUDE_CODE_REMOTE_SESSION_ID" => "cse_x/../evil")&.key?("url"), "odd ids send no link"
+  end
+
+  def test_only_claude_ai_session_pages_become_links
+    feed = BotOps::CloudFeed.new(log: File.join(Dir.mktmpdir, "c.jsonl"))
+    base = { "session_id" => "c1", "hook_event_name" => "Stop", "cwd" => "/home/user/rutie" }
+    feed.ingest(base.merge("url" => "https://evil.example/x"))
+    assert_nil feed.snapshot["sessions"].first["url"]
+    feed.ingest(base.merge("url" => "https://claude.ai/code/session_01AbC"))
+    assert_equal "https://claude.ai/code/session_01AbC", feed.snapshot["sessions"].first["url"]
+  end
+
+  def test_session_row_and_details_link_open_the_page
+    feed = BotOps::CloudFeed.new(log: File.join(Dir.mktmpdir, "c.jsonl"))
+    feed.ingest({ "session_id" => "c1", "hook_event_name" => "UserPromptSubmit", "prompt" => "Backport PR 232",
+                  "cwd" => "/home/user/rutie", "url" => "https://claude.ai/code/session_01AbC" })
+    store = BotOps::Store.new.apply(type: "snapshot", snapshot: feed.snapshot, local: false)
+    host = BotOps::PreviewHost.new
+    scene = BotOps::Scene.new(store, host)
+    c = scene.build
+    %w[↗ Open\ in\ claude.ai\ ↗].each do |label|
+      cmd = c.cmds.find { |x| x.op == :text && x.a[0] == label }
+      refute_nil cmd, "#{label} drawn"
+      assert scene.click(cmd.a[1] + 2, cmd.a[2] + 4)
+    end
+    assert_equal [[:open_url, "https://claude.ai/code/session_01AbC"]] * 2, host.actions
+    assert_equal "open:https://claude.ai/code/session_01AbC",
+                 BotOps::NativeHost.new(channel: BotOps::Comms::Channel.new).tap { |h| h.open_url("https://claude.ai/code/session_01AbC") }.hit(-1)
+  end
+end

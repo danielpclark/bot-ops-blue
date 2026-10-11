@@ -151,6 +151,11 @@ module BotOps
       @pending = "minimize"
     end
 
+    # The native side opens it in the default browser (claude.ai links only).
+    def open_url(url)
+      @pending = "open:#{url}"
+    end
+
     def toggle_decorations
       @pending = "decorations:toggle"
     end

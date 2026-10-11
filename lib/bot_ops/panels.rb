@@ -73,6 +73,11 @@ module BotOps
       # When you last prompted it, which is what the list is sorted by.
       txt(Store.ago(Store.worked_at(s)), w - 100, y + 21, size: 9, color: MUTED, width: 88, align: :right)
       @c.hit(4, y, w - 8, row_h) { select_session(s["id"]) }
+      # Cloud sessions link to their page at claude.ai (drawn after the row's
+      # own click area so it takes the click).
+      if s["url"]
+        link("↗", w - 118, y + 4, size: 11, color: CYAN) { open_session_url(s["url"]) }
+      end
     end
 
     # ---- Live activity -------------------------------------------------
@@ -275,6 +280,7 @@ module BotOps
       avatar(16, 6, color, entry_glyph(s), 44)
       txt(clip(Store.display_name(s), (w - 100) / 7), 72, 6, size: 11, color: TEXT, weight: :bold)
       status_pill(72, 25, status_label(s))
+      link("Open in claude.ai ↗", 150, 24, size: 9, color: CYAN) { open_session_url(s["url"]) } if s["url"]
       txt(clip([s["host"], entry_name(s), s["version"] && "v#{s['version']}"].compact.join(" · "), (w - 100) / 5.5),
           72, 38, size: 9, color: MUTED)
 

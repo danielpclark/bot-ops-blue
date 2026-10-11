@@ -245,6 +245,12 @@ module BotOps
       @host.invalidate
     end
 
+    # Opens a cloud session's page at claude.ai in the browser.
+    def open_session_url(url)
+      return unless url.to_s.match?(CloudFeed::SESSION_URL) && @host.respond_to?(:open_url)
+      @host.open_url(url)
+    end
+
     # Dispatch a click at window coordinates. Returns true when a region
     # handled it.
     def click(x, y)
@@ -274,6 +280,7 @@ module BotOps
     def toggle_decorations; @actions << :toggle_decorations; end
     def toggle_fullscreen; @actions << :toggle_fullscreen; end
     def quit; @actions << :quit; end
+    def open_url(url); @actions << [:open_url, url]; end
     def toolkit_name; "preview"; end
     def channel_name; "preview"; end
   end

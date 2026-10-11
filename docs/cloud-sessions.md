@@ -243,7 +243,7 @@ Only these fields, and only from cloud sessions:
 
 | Sent | Never sent |
 | --- | --- |
-| Session id, event name, working directory, git branch, model, the session's title | File contents |
+| Session id, event name, working directory, git branch, model, the session's claude.ai URL | File contents |
 | A 300-character prompt excerpt | Tool output |
 | Tool name and a 160-character detail (command, file path, pattern, URL) | Your environment variables or secrets |
 | Notification text (e.g. a permission prompt) | Transcripts |
@@ -258,7 +258,7 @@ stored only on your machine.
 | From a cloud session, `curl -s -o /dev/null -w '%{http_code}' "$BOT_OPS_URL/v1/health"` gives `401`, with `Www-Authenticate: Basic realm="bot-ops-blue"` | The network secret isn't attached as Basic auth. Most often its **Prefix** was left as `Bearer`; it must be `Basic`. Secrets can't be edited: delete it, add it again, and test from a new session. |
 | Nothing appears for a new session | Is the tunnel running, and do the three `curl` checks pass? Is `BOT_OPS_URL` exactly your `https://` URL with no trailing path? Does the network secret's list mark it **Not sent**? The note under it says why. |
 | Still nothing | Type `/hooks` in the session to list its hooks. If the Bot Ops hooks aren't there, the setup script didn't run for this session: it started before you saved the script, or it runs in a different environment. |
-| A cloud session is named after its project, not its claude.ai title | It runs a reporter from before titles were sent. Sessions started after you paste the current `cloud/setup.sh` report their title, including one you renamed by hand. |
+| A cloud session's name differs from the claude.ai sidebar | Expected. The sidebar title is generated and stored by claude.ai, not on the session's VM, so the dashboard names cloud sessions after their first prompt. Click **↗** on the session's row, or **Open in claude.ai ↗** in Session Details, to open the session's page. Sessions from a reporter older than the link show no **↗**. |
 | `ERR_NGROK_2263` when starting the tunnel | The policy uses a paid ngrok feature. Regenerate it with `rake ngrok:policy`; the shipped template uses only free actions. |
 | `ERR_NGROK_334` | ngrok is already running for that domain, perhaps in another terminal. |
 | The `-u` check gives 401 | The token changed after the policy was written. Run `rake ngrok:policy` again, restart the tunnel, and replace the network secret. |

@@ -24,8 +24,8 @@ from some hooks is fed back to Claude), always exits 0, and sends from a
 forked background process so a session never waits on the network.
 
 Only these fields leave the session: session id, event name, cwd, git
-branch, model, the session's title (the one the claude.ai sidebar shows,
-read from the transcript's title records), a 300-character prompt excerpt,
+branch, model, the session's claude.ai URL, its title when the transcript
+has one (cloud transcripts usually don't), a 300-character prompt excerpt,
 the tool name and a 160-character detail (command, file path, pattern or
 URL), and notification text. File contents and tool output are never sent.
 
@@ -34,6 +34,7 @@ Standard library only (Python 3.6+).
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -49,9 +50,21 @@ def one_line(text, limit):
     return text.splitlines()[0][:limit] if text else ""
 
 
+def session_url():
+    """The session's page at claude.ai, from CLAUDE_CODE_REMOTE_SESSION_ID
+    (Anthropic's docs: https://claude.ai/code/${ID/#cse_/session_})."""
+    sid = os.environ.get("CLAUDE_CODE_REMOTE_SESSION_ID", "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", sid):
+        return None
+    return "https://claude.ai/code/" + re.sub(r"^cse_", "session_", sid)
+
+
 def trim(payload):
     ev = {k: payload[k] for k in PASS_THROUGH if isinstance(payload.get(k), str)}
     ev["at"] = time.time()
+    url = session_url()
+    if url:
+        ev["url"] = url
     if isinstance(payload.get("prompt"), str):
         ev["prompt"] = payload["prompt"].strip()[:300]
     tool_input = payload.get("tool_input")

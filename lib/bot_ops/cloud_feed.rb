@@ -18,6 +18,8 @@ module BotOps
     RECENT_S = 12 * 3600
     EVENT_LIMIT = 1000
     LOG = File.join(Dir.home, ".config", "bot-ops-blue", "cloud-events.jsonl")
+    # The only links the dashboard will open: a session's page at claude.ai.
+    SESSION_URL = %r{\Ahttps://claude\.ai/code/[A-Za-z0-9_-]+\z}
 
     def initialize(log: LOG)
       @log = log
@@ -74,6 +76,7 @@ module BotOps
       s["cwd"] ||= e["cwd"]
       s["branch"] = e["branch"] if e["branch"].is_a?(String) && !e["branch"].empty?
       s["model"] = e["model"] if e["model"].is_a?(String)
+      s["url"] = e["url"] if e["url"].is_a?(String) && e["url"].match?(SESSION_URL)
       # The session's own title (as the claude.ai sidebar shows it) beats a
       # name made up from its first prompt.
       if e["title"].is_a?(String) && !e["title"].strip.empty?
