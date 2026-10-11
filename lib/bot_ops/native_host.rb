@@ -151,6 +151,18 @@ module BotOps
       @pending = "minimize"
     end
 
+    # Mouse wheel / trackpad lines from the native side.
+    def scroll(lines)
+      @dirty = true if @scene.scroll(lines.to_i)
+      nil
+    end
+
+    # A key the native side offers to Ruby first; "handled" when it was used
+    # (27 = Esc closes an open overlay before Esc leaves fullscreen).
+    def key(code)
+      code.to_i == 27 && @scene.escape ? "handled" : ""
+    end
+
     # The native side opens it in the default browser (claude.ai links only).
     def open_url(url)
       @pending = "open:#{url}"
@@ -176,6 +188,6 @@ module BotOps
       @channel.name
     end
 
-    logged :poll, :hit, :resize, :fullscreen_changed
+    logged :poll, :hit, :resize, :fullscreen_changed, :scroll, :key
   end
 end

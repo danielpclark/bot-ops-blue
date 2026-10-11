@@ -27,10 +27,15 @@ module BotOps
     RECENT_S = 12 * 3600
     EVENT_LIMIT = 1000
 
-    def initialize(claude_dir: File.join(Dir.home, ".claude"), host: Socket.gethostname.sub(/\.local\z/, ""))
+    # full_detail: also keep each event's full text (a tool call's whole input,
+    # a prompt, an error) for the dashboard's detail overlay. On for the
+    # dashboard's own probe; off for bin/bot-ops-agent, so snapshots sent over
+    # the network stay small and carry excerpts only.
+    def initialize(claude_dir: File.join(Dir.home, ".claude"), host: Socket.gethostname.sub(/\.local\z/, ""),
+                   full_detail: false)
       @claude_dir = claude_dir
       @host = host
-      @transcripts = Transcripts.new(File.join(claude_dir, "projects"))
+      @transcripts = Transcripts.new(File.join(claude_dir, "projects"), full_detail: full_detail)
       @hooks = HookLog.new(File.join(claude_dir, "bot-ops", "hooks.jsonl"))
       @health = nil
       @health_at = 0
@@ -231,8 +236,12 @@ module BotOps
     class Transcripts
       TOOL_DETAIL_KEYS = %w[command file_path pattern url query description prompt skill].freeze
 
-      def initialize(dir)
+      FULL_LIMIT = 12_000   # characters of full text kept per event
+      VALUE_LIMIT = 4_000   # per string inside a tool's input
+
+      def initialize(dir, full_detail: false)
         @dir = dir
+        @full_detail = full_detail
         @offsets = {}
         @sessions = {}
         @seen = {}
@@ -378,7 +387,7 @@ module BotOps
           s["last_tool"] = { "name" => b["name"], "detail" => detail, "at" => at }
           next unless recent
           bucket(s, at)[1] += 1
-          event(s, at, "tool", b["name"].to_s, detail)
+          event(s, at, "tool", b["name"].to_s, detail, full: (full_input(b["input"]) if @full_detail))
         end
       end
 
@@ -390,7 +399,8 @@ module BotOps
             s["errors"] += 1
             next unless recent
             bucket(s, at)[3] += 1
-            event(s, at, "error", "tool error", one_line(text_of(b["content"])))
+            text = text_of(b["content"])
+            event(s, at, "error", "tool error", one_line(text), full: (text if @full_detail))
           end
           text = c.map { |b| b["text"] if b.is_a?(Hash) && b["type"] == "text" }.compact.join(" ")
         else
@@ -408,7 +418,7 @@ module BotOps
         s["prompt_at"] = [s["prompt_at"].to_f, at].max if at
         return unless recent
         bucket(s, at)[2] += 1
-        event(s, at, "prompt", "prompt", one_line(text))
+        event(s, at, "prompt", "prompt", one_line(text), full: (text if @full_detail))
       end
 
       def seen?(sid, msg_id)
@@ -427,9 +437,11 @@ module BotOps
         (t.to_i / 3600) * 3600
       end
 
-      def event(s, at, kind, title, detail)
-        @events << { "at" => at, "sid" => s["id"], "project" => File.basename(s["cwd"].to_s), "kind" => kind,
-                     "title" => title, "detail" => detail.to_s[0, 160] }
+      def event(s, at, kind, title, detail, full: nil)
+        e = { "at" => at, "sid" => s["id"], "project" => File.basename(s["cwd"].to_s), "kind" => kind,
+              "title" => title, "detail" => detail.to_s[0, 160] }
+        e["full"] = full.to_s[0, FULL_LIMIT] if full && !full.to_s.strip.empty?
+        @events << e
         @events.shift(@events.size - EVENT_LIMIT * 2) if @events.size > EVENT_LIMIT * 3
       end
 
@@ -444,6 +456,23 @@ module BotOps
         v = key ? input[key] : ""
         v = v.sub(Dir.home, "~") if key == "file_path"
         one_line(v)
+      end
+
+      # A tool call's input for reading: "key: value" per field, with
+      # multi-line values (commands, file contents) as indented lines and long
+      # strings shortened.
+      def full_input(input)
+        return input.to_s unless input.is_a?(Hash)
+        input.map do |key, v|
+          if v.is_a?(String)
+            v = "#{v[0, VALUE_LIMIT]}… (#{v.length - VALUE_LIMIT} more characters)" if v.length > VALUE_LIMIT
+            v.include?("\n") ? "#{key}:\n#{v.lines.map { |l| "  #{l.chomp}" }.join("\n")}" : "#{key}: #{v}"
+          else
+            "#{key}: #{JSON.generate(v)}"
+          end
+        end.join("\n")
+      rescue StandardError
+        input.to_s
       end
 
       def text_of(content)

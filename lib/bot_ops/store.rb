@@ -22,7 +22,7 @@ module BotOps
       shell: %w[Bash BashOutput KillShell Monitor]
     }.freeze
 
-    attr_accessor :page, :activity_tab, :tool_filter, :selected_session_id
+    attr_accessor :page, :activity_tab, :tool_filter, :selected_session_id, :overlay
     attr_reader :collector_status, :probe_error, :version
 
     def initialize

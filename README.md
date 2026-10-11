@@ -59,6 +59,12 @@ The window opens without an OS title bar. Drag the header bar to move it.
 The three buttons at the right of the header minimize (leaving fullscreen
 first if needed), enter or leave fullscreen, and quit. The **Settings** page
 has the same controls plus a title-bar toggle.
+Click a tool call, prompt, event-log line, machine, or a live session's
+last tool for the full detail in a box over the dashboard; it scrolls, and
+Esc, its X or a click outside closes it. Full text (a tool's whole input, a
+prompt, an error) is kept for this machine's sessions only; other machines
+and cloud sessions send short excerpts.
+
 In fullscreen macOS slides its menu bar over the top edge, so use the keys:
 **Esc** leaves fullscreen, **F11** or **Ctrl+Cmd+F** toggles it.
 

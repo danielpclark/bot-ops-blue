@@ -59,6 +59,8 @@ struct HubApp {
     minimize_at: Option<f64>,
     /// Consecutive polls in which Ruby raised.
     poll_failures: u32,
+    /// Scrolling not yet sent to Ruby, in lines.
+    scroll_lines: f32,
 }
 
 /// Images Ruby can draw by name, embedded at build time. lib/bot_ops/canvas.rb
@@ -342,6 +344,23 @@ impl HubApp {
         }
     }
 
+    // Mouse wheel and trackpad scrolling, sent to Ruby in whole lines (it
+    // scrolls an open detail overlay). egui's y is positive when scrolling up.
+    fn handle_scroll(&mut self, ctx: &egui::Context) {
+        let dy = ctx.input(|i| i.raw_scroll_delta.y);
+        if dy == 0.0 {
+            return;
+        }
+        self.scroll_lines += -dy / 16.0;
+        let lines = self.scroll_lines.trunc();
+        if lines != 0.0 {
+            self.scroll_lines -= lines;
+            if self.call_host("scroll", &[lines as i64]).is_err() {
+                eprintln!("bot_ops_native: Ruby raised in scroll");
+            }
+        }
+    }
+
     // Tells Ruby when fullscreen starts or ends (so the header's control can
     // show what it will do), and finishes a minimize that had to leave
     // fullscreen first.
@@ -366,13 +385,15 @@ impl HubApp {
         }
     }
 
-    // Esc leaves fullscreen; F11 or Ctrl+Cmd+F toggles it, as well as the
+    // Esc goes to Ruby first (it closes an open detail overlay); otherwise it
+    // leaves fullscreen. F11 or Ctrl+Cmd+F toggles fullscreen, as does the
     // header's fullscreen control.
     fn handle_keys(&mut self, ctx: &egui::Context) {
         let (esc, toggle) = ctx.input(|i| {
             let ctrl_cmd_f = i.modifiers.ctrl && i.modifiers.mac_cmd && i.key_pressed(Key::F);
             (i.key_pressed(Key::Escape), i.key_pressed(Key::F11) || ctrl_cmd_f)
         });
+        let esc = esc && self.call_host("key", &[27]).map(|r| r != "handled").unwrap_or(true);
         if esc && is_fullscreen(ctx) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
         } else if toggle {
@@ -516,6 +537,7 @@ impl eframe::App for HubApp {
         self.fit_to_window(ctx);
         self.sync_window_state(ctx);
         self.handle_keys(ctx);
+        self.handle_scroll(ctx);
         self.poll_ruby(ctx);
 
         if ctx.input(|i| i.pointer.primary_pressed()) {
@@ -658,6 +680,7 @@ rutie::methods!(
                             minimize_pending: false,
                             minimize_at: None,
                             poll_failures: 0,
+                            scroll_lines: 0.0,
                         }))
                     }),
                 )

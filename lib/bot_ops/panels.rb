@@ -113,6 +113,7 @@ module BotOps
         txt(Store.ago(s["last_at"] || s["status_at"]), w - 170, y + 11, size: 9, color: MUTED, width: 70, align: :right)
         status_pill(w - 86, y + 12, status_label(s))
         @c.hit(10, y, w - 20, row_h - 6) { select_session(s["id"]) }
+        @c.hit(tool_x, y, w - 180 - tool_x, row_h - 6) { open_overlay(last_tool_overlay(s)) } if s["last_tool"]
       end
     end
 
@@ -169,6 +170,7 @@ module BotOps
         dot(cx[2], y + 8, col(err ? RED : project_color(e["project"])), 5)
         txt(err ? "error" : e["title"], cx[2] + 9, y + 3, size: 9, color: err ? RED : TEXT)
         txt(clip(e["detail"], (w - cx[3] - 12) / 5.6), cx[3], y + 3, size: 9, color: err ? RED : MUTED, mono: true)
+        @c.hit(10, y, w - 20, row_h) { open_overlay(event_overlay(e)) }
       end
     end
 
@@ -268,6 +270,7 @@ module BotOps
         txt(clip(e["session"], name_w / 6.5), 42, y + 5, size: 9, color: TEXT, weight: :bold)
         txt(clip(e["detail"], (w - name_w - 130) / 5.5), 48 + name_w, y + 5, size: 9, color: TEXT)
         txt(Store.ago(e["at"]), w - 76, y + 5, size: 9, color: MUTED, width: 64, align: :right)
+        @c.hit(4, y, w - 8, row_h) { open_overlay(event_overlay(e)) }
       end
     end
 
@@ -331,6 +334,7 @@ module BotOps
         kind = %w[tool lifecycle].include?(e["kind"]) ? e["title"].to_s : e["kind"].to_s
         txt(clip(kind, 14), 54, y, size: 9, color: KIND_COLORS[e["kind"]] || MUTED, mono: true)
         txt(clip("#{e['session']}: #{e['detail']}", (w - 160) / 5.6), 148, y, size: 9, color: TEXT)
+        @c.hit(10, y - 2, w - 20, row_h) { open_overlay(event_overlay(e)) }
       end
     end
 
@@ -350,7 +354,69 @@ module BotOps
         txt([("#{m['sessions']} sessions" if m["online"]), os, (m["online"] ? nil : "last seen #{Store.ago(m['seen_at'])}")].compact.join(" · "),
             48, y + 17, size: 8, color: MUTED)
         txt(m["online"] ? "online" : "offline", w - 70, y + 2, size: 8, color: c, width: 58, align: :right)
+        @c.hit(4, y, w - 8, row_h) { open_overlay(machine_overlay(m)) }
       end
+    end
+
+    # ---- detail overlays ----------------------------------------------
+
+    EVENT_HEADINGS = { "tool" => "Input", "prompt" => "Prompt", "error" => "Error", "attention" => "Message" }.freeze
+
+    # Everything known about one event: tool call, prompt, error or notice.
+    def event_overlay(e)
+      session = @store.session(e["sid"])
+      title = case e["kind"]
+              when "tool" then "#{e['title']} tool call"
+              when "error" then "Tool error"
+              when "prompt" then "Prompt"
+              else e["title"].to_s.capitalize
+              end
+      o = Overlay.new(title, subtitle: [e["session"], e["project"], e["host"]].compact.uniq.join("  ·  "))
+      o.field("When", Time.at(e["at"].to_f).strftime("%a %b %-d %Y, %H:%M:%S"))
+      o.field("Session", e["session"])
+      o.field("Project", e["project"])
+      o.field("Machine", e["host"])
+      o.field("Client", session && entry_name(session))
+      o.field("Model", session && Store.model_name(session["model"]))
+      o.field("Session id", e["sid"])
+      o.block(EVENT_HEADINGS.fetch(e["kind"], "Detail"), e["full"] || e["detail"])
+      unless e["full"]
+        o.note("Only this excerpt is available: sessions on other machines and in the cloud send a short " \
+               "excerpt of each event, never the full text.")
+      end
+      o
+    end
+
+    # The tool a live session ran last, with the full event when it is known.
+    def last_tool_overlay(s)
+      t = s["last_tool"]
+      e = @store.events.find { |x| x["sid"] == s["id"] && x["kind"] == "tool" && x["at"].to_f == t["at"].to_f }
+      e ||= { "at" => t["at"], "sid" => s["id"], "kind" => "tool", "title" => t["name"], "detail" => t["detail"],
+              "session" => Store.display_name(s), "project" => project_of(s), "host" => s["host"] }
+      event_overlay(e)
+    end
+
+    def machine_overlay(m)
+      hl = m["health"]
+      sessions = @store.sessions.select { |s| s["host"] == m["host"] }
+      source = if m["local"] then "this machine (read directly)"
+               elsif m["host"] == CloudFeed::HOST then "cloud sessions (hook reports)"
+               else "bin/bot-ops-agent"
+               end
+      o = Overlay.new(m["host"], subtitle: m["online"] ? "online" : "offline, last seen #{Store.ago(m['seen_at'])}")
+      o.field("Source", source)
+      o.field("OS", hl["os"])
+      o.field("CPUs", hl["cpus"])
+      o.field("Load", hl["load"] && format("%.2f", hl["load"]))
+      o.field("Memory", hl["mem_pct"] && "#{hl['mem_pct']}% used")
+      o.field("Disk", hl["disk_pct"] && "#{hl['disk_pct']}% used")
+      o.field("Uptime", hl["uptime_s"] && uptime_text(hl["uptime_s"]))
+      o.field("Last report", Store.ago(m["seen_at"]))
+      unless sessions.empty?
+        list = sessions.map { |s| "#{status_label(s).ljust(9)} #{Store.display_name(s)}  (#{project_of(s)}, #{entry_name(s)})" }
+        o.block("Live sessions", list.join("\n"))
+      end
+      o
     end
 
     # ---- Settings ------------------------------------------------------

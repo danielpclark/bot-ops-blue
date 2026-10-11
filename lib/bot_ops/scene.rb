@@ -36,6 +36,7 @@ module BotOps
       draw_header
       draw_sidebar
       @c.group(Layout::CONTENT_X, Layout::CONTENT_Y) { draw_page(@store.page) }
+      draw_overlay(@store.overlay) if @store.overlay
       @c
     end
 
@@ -243,6 +244,90 @@ module BotOps
     def select_session(id)
       @store.selected_session_id = id
       @host.invalidate
+    end
+
+    # ---- detail overlay ----------------------------------------------------
+
+    def open_overlay(overlay)
+      @store.overlay = overlay
+      @host.invalidate
+    end
+
+    def close_overlay
+      @store.overlay = nil
+      @host.invalidate
+    end
+
+    # Mouse wheel / trackpad, in lines. True when something used it.
+    def scroll(lines)
+      return false unless @store.overlay && lines != 0
+      @store.overlay.scroll_by(lines)
+      @host.invalidate
+      true
+    end
+
+    # Esc closes an open overlay. True when it did.
+    def escape
+      return false unless @store.overlay
+      close_overlay
+      true
+    end
+
+    OVERLAY_TEXT = 10
+    OVERLAY_LINE = 16
+    OVERLAY_CHAR = OVERLAY_TEXT * 0.602 # DejaVu Sans Mono's advance
+
+    # The box: centred, dimmed backdrop, electric frame, title, close X, and a
+    # scrolling window of the content's lines with a scrollbar when it
+    # overflows. A click on the backdrop closes it; clicks inside don't.
+    def draw_overlay(o)
+      w, h = @width, @height
+      @c.rect(0, 0, w, h, fill: col(BG, 0.78))
+      @c.hit(0, 0, w, h) { close_overlay }
+
+      bw = [[w - 260, 1040].min, 560].max
+      bh = [[h - 200, 780].min, 320].max
+      bx = (w - bw) / 2
+      by = (h - bh) / 2
+      @c.rect(bx, by, bw, bh, curve: 9, fill: col(PANEL))
+      electric_frame(bx, by, bw, bh, curve: 9)
+      @c.hit(bx, by, bw, bh) {}
+
+      txt(clip(o.title, (bw - 90) / 8), bx + 22, by + 14, size: 13, color: TEXT, weight: :bold)
+      txt(clip(o.subtitle, (bw - 60) / 5.5), bx + 22, by + 36, size: 9, color: MUTED) if o.subtitle
+      cx = bx + bw - 34
+      @c.line(cx, by + 16, cx + 12, by + 28, stroke: col(MUTED), strokewidth: 1.5)
+      @c.line(cx + 12, by + 16, cx, by + 28, stroke: col(MUTED), strokewidth: 1.5)
+      @c.hit(cx - 6, by + 10, 24, 24) { close_overlay }
+      fade_line(bx + 14, bx + bw - 14, by + 56, BOLT)
+
+      top = by + 68
+      body_h = bh - 68 - 30
+      visible = body_h / OVERLAY_LINE
+      lines = o.lines(((bw - 64) / OVERLAY_CHAR).floor)
+      o.offset = o.offset.clamp(0, [lines.size - visible, 0].max)
+      lines[o.offset, visible].to_a.each_with_index do |(style, a, b, label_w), i|
+        y = top + i * OVERLAY_LINE
+        case style
+        when :field
+          txt(a, bx + 24, y, size: OVERLAY_TEXT, color: MUTED, mono: true)
+          txt(b, bx + 24 + label_w * OVERLAY_CHAR, y, size: OVERLAY_TEXT, color: TEXT, mono: true)
+        when :heading then txt(a, bx + 24, y, size: OVERLAY_TEXT, color: CYAN, weight: :bold)
+        when :note then txt(a, bx + 24, y, size: OVERLAY_TEXT, color: DIM, mono: true)
+        when :blank then nil
+        else txt(a, bx + 24, y, size: OVERLAY_TEXT, color: TEXT, mono: true)
+        end
+      end
+
+      if lines.size > visible
+        track_h = body_h - 4
+        thumb_h = [track_h * visible / lines.size, 24].max
+        thumb_y = top + (track_h - thumb_h) * o.offset / (lines.size - visible).to_f
+        @c.rect(bx + bw - 16, top, 4, track_h, curve: 2, fill: col(TRACK))
+        @c.rect(bx + bw - 16, thumb_y, 4, thumb_h, curve: 2, fill: col(BOLT, 0.9))
+      end
+      hint = lines.size > visible ? "Scroll for more  ·  " : ""
+      txt("#{hint}Esc, X or a click outside closes", bx + 24, by + bh - 22, size: 8, color: DIM)
     end
 
     # Opens a cloud session's page at claude.ai in the browser.
