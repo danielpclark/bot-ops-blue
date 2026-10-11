@@ -151,6 +151,14 @@ module BotOps
       @pending = "minimize"
     end
 
+    # The measured width of a 10pt monospace character, in thousandths of a
+    # point, whenever the zoom changes it.
+    def mono_advance(milli)
+      @scene.mono_char = milli.to_i / 1000.0 if milli.to_i.positive?
+      @dirty = true
+      nil
+    end
+
     # Mouse wheel / trackpad lines from the native side.
     def scroll(lines)
       @dirty = true if @scene.scroll(lines.to_i)
@@ -188,6 +196,6 @@ module BotOps
       @channel.name
     end
 
-    logged :poll, :hit, :resize, :fullscreen_changed, :scroll, :key
+    logged :poll, :hit, :resize, :fullscreen_changed, :scroll, :key, :mono_advance
   end
 end

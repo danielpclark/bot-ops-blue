@@ -66,6 +66,15 @@ module BotOps
       @cmds << Cmd.new(:polyline, [pts, stroke, strokewidth, closed])
     end
 
+    # Draws the block's commands clipped to x, y, w, h: nothing in it shows
+    # outside that rectangle. Clips nest (each is cut to its parent's).
+    def clip(x, y, w, h)
+      @cmds << Cmd.new(:clip, [@ox + x, @oy + y, w, h])
+      yield
+    ensure
+      @cmds << Cmd.new(:unclip, [])
+    end
+
     # Named image (ext/bot_ops_native/assets/<name>.png) clipped to a circle.
     def image_circle(name, cx, cy, r)
       @cmds << Cmd.new(:image, [name.to_s, @ox + cx, @oy + cy, r])
@@ -100,7 +109,7 @@ module BotOps
 
     # ---- frame export for the native host ----------------------------------
 
-    OPS = { rect: "r", circle: "c", line: "l", wedge: "w", area: "a", text: "t", image: "i", polyline: "p" }.freeze
+    OPS = { rect: "r", circle: "c", line: "l", wedge: "w", area: "a", text: "t", image: "i", polyline: "p", clip: "k", unclip: "K" }.freeze
 
     # Compact JSON understood by ext/bot_ops_native (see src/lib.rs).
     # drag: the region that moves the window; resize: the grip that resizes it.
@@ -121,8 +130,15 @@ module BotOps
 
     def to_svg
       out = +%(<svg xmlns="http://www.w3.org/2000/svg" width="#{@width}" height="#{@height}" font-family="DejaVu Sans, sans-serif">)
+      clips = 0
       @cmds.each do |c|
         case c.op
+        when :clip
+          x, y, w, h = c.a
+          clips += 1
+          out << %(<clipPath id="cut#{clips}"><rect x="#{x}" y="#{y}" width="#{w}" height="#{h}"/></clipPath><g clip-path="url(#cut#{clips})">)
+        when :unclip
+          out << "</g>"
         when :rect
           x, y, w, h, f, s, r, sw = c.a
           out << %(<rect x="#{x}" y="#{y}" width="#{w}" height="#{h}" rx="#{r}" fill="#{svg_c(f)}" stroke="#{svg_c(s)}" stroke-width="#{sw}"/>)

@@ -63,6 +63,8 @@ struct HubApp {
     poll_failures: u32,
     /// Scrolling not yet sent to Ruby, in lines.
     scroll_lines: f32,
+    /// Monospace advance last reported to Ruby (thousandths of a point).
+    mono_advance: Option<i64>,
     /// While the grip is held: window size minus pointer, in unzoomed points.
     resizing: Option<Vec2>,
 }
@@ -382,6 +384,23 @@ impl HubApp {
         }
     }
 
+    // Tells Ruby the real width of a 10pt monospace character at the current
+    // zoom (in thousandths of a point), averaged over 100 so pixel rounding
+    // counts: wrapping text from a nominal 0.602em could overflow at some
+    // window sizes.
+    fn report_mono_advance(&mut self, ctx: &egui::Context) {
+        let width = ctx.fonts(|f| {
+            f.layout_no_wrap("0".repeat(100), FontId::new(10.0, FontFamily::Monospace), Color32::WHITE).size().x
+        });
+        let milli = (width * 10.0).round() as i64; // width / 100 chars * 1000
+        if self.mono_advance != Some(milli) {
+            self.mono_advance = Some(milli);
+            if self.call_host("mono_advance", &[milli]).is_err() {
+                eprintln!("bot_ops_native: Ruby raised in mono_advance");
+            }
+        }
+    }
+
     // Mouse wheel and trackpad scrolling, sent to Ruby in whole lines (it
     // scrolls an open detail overlay). egui's y is positive when scrolling up.
     fn handle_scroll(&mut self, ctx: &egui::Context) {
@@ -458,9 +477,23 @@ impl HubApp {
         }
     }
 
-    fn paint(&self, painter: &Painter) {
+    fn paint(&self, base: &Painter) {
+        // "k" clips what follows to a rectangle (cut to the enclosing clip)
+        // until its matching "K".
+        let mut painter = base.clone();
+        let mut clips: Vec<Rect> = Vec::new();
         for cmd in &self.frame.cmds {
             match text(cmd, 0) {
+                "k" => {
+                    let r = Rect::from_min_size(Pos2::new(num(cmd, 1), num(cmd, 2)), Vec2::new(num(cmd, 3), num(cmd, 4)));
+                    clips.push(painter.clip_rect());
+                    painter = base.with_clip_rect(r.intersect(painter.clip_rect()));
+                }
+                "K" => {
+                    if let Some(previous) = clips.pop() {
+                        painter = base.with_clip_rect(previous);
+                    }
+                }
                 "r" => {
                     let rect = Rect::from_min_size(Pos2::new(num(cmd, 1), num(cmd, 2)), Vec2::new(num(cmd, 3), num(cmd, 4)));
                     let rounding = Rounding::same(num(cmd, 7));
@@ -574,6 +607,7 @@ impl eframe::App for HubApp {
         }
         self.fit_to_window(ctx);
         self.sync_window_state(ctx);
+        self.report_mono_advance(ctx);
         self.handle_keys(ctx);
         self.handle_scroll(ctx);
         self.handle_resize(ctx);
@@ -721,6 +755,7 @@ rutie::methods!(
                             minimize_at: None,
                             poll_failures: 0,
                             scroll_lines: 0.0,
+                            mono_advance: None,
                             resizing: None,
                         }))
                     }),

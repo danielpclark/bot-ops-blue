@@ -16,6 +16,9 @@ module BotOps
     STAT_WIDTHS = [112, 100, 120, 140, 128].freeze
 
     attr_reader :store, :host, :width, :height
+    # Width of one 10pt monospace character as the native side renders it at
+    # the current zoom (pixel rounding makes it differ from the font's 0.602em).
+    attr_writer :mono_char
 
     def initialize(store, host)
       @store = store
@@ -295,7 +298,10 @@ module BotOps
 
     OVERLAY_TEXT = 10
     OVERLAY_LINE = 16
-    OVERLAY_CHAR = OVERLAY_TEXT * 0.602 # DejaVu Sans Mono's advance
+
+    def mono_char
+      @mono_char || OVERLAY_TEXT * 0.602 # DejaVu Sans Mono's nominal advance
+    end
 
     # The box: centred, dimmed backdrop, electric frame, title, close X, and a
     # scrolling window of the content's lines with a scrollbar when it
@@ -313,8 +319,10 @@ module BotOps
       electric_frame(bx, by, bw, bh, curve: 9)
       @c.hit(bx, by, bw, bh) {}
 
-      txt(clip(o.title, (bw - 90) / 8), bx + 22, by + 14, size: 13, color: TEXT, weight: :bold)
-      txt(clip(o.subtitle, (bw - 60) / 5.5), bx + 22, by + 36, size: 9, color: MUTED) if o.subtitle
+      @c.clip(bx + 16, by + 8, bw - 72, 44) do
+        txt(clip(o.title, (bw - 90) / 8), bx + 22, by + 14, size: 13, color: TEXT, weight: :bold)
+        txt(clip(o.subtitle, (bw - 60) / 5.5), bx + 22, by + 36, size: 9, color: MUTED) if o.subtitle
+      end
       cx = bx + bw - 34
       @c.line(cx, by + 16, cx + 12, by + 28, stroke: col(MUTED), strokewidth: 1.5)
       @c.line(cx + 12, by + 16, cx, by + 28, stroke: col(MUTED), strokewidth: 1.5)
@@ -324,18 +332,22 @@ module BotOps
       top = by + 68
       body_h = bh - 68 - 30
       visible = body_h / OVERLAY_LINE
-      lines = o.lines(((bw - 64) / OVERLAY_CHAR).floor)
+      # Columns from the measured character width, one spare for safety; the
+      # clip keeps anything that still doesn't fit inside the frame.
+      lines = o.lines(((bw - 64) / mono_char).floor - 1)
       o.offset = o.offset.clamp(0, [lines.size - visible, 0].max)
-      lines[o.offset, visible].to_a.each_with_index do |(style, a, b, label_w), i|
-        y = top + i * OVERLAY_LINE
-        case style
-        when :field
-          txt(a, bx + 24, y, size: OVERLAY_TEXT, color: MUTED, mono: true)
-          txt(b, bx + 24 + label_w * OVERLAY_CHAR, y, size: OVERLAY_TEXT, color: TEXT, mono: true)
-        when :heading then txt(a, bx + 24, y, size: OVERLAY_TEXT, color: CYAN, weight: :bold)
-        when :note then txt(a, bx + 24, y, size: OVERLAY_TEXT, color: DIM, mono: true)
-        when :blank then nil
-        else txt(a, bx + 24, y, size: OVERLAY_TEXT, color: TEXT, mono: true)
+      @c.clip(bx + 16, top - 2, bw - 38, body_h + 4) do
+        lines[o.offset, visible].to_a.each_with_index do |(style, a, b, label_w), i|
+          y = top + i * OVERLAY_LINE
+          case style
+          when :field
+            txt(a, bx + 24, y, size: OVERLAY_TEXT, color: MUTED, mono: true)
+            txt(b, bx + 24 + label_w * mono_char, y, size: OVERLAY_TEXT, color: TEXT, mono: true)
+          when :heading then txt(a, bx + 24, y, size: OVERLAY_TEXT, color: CYAN, weight: :bold)
+          when :note then txt(a, bx + 24, y, size: OVERLAY_TEXT, color: DIM, mono: true)
+          when :blank then nil
+          else txt(a, bx + 24, y, size: OVERLAY_TEXT, color: TEXT, mono: true)
+          end
         end
       end
 

@@ -93,6 +93,22 @@ class OverlayTest < Minitest::Test
     assert_equal [[:field, "a", "b", 3]], o.field("a", "b").lines(40)
   end
 
+  # Text wraps from the character width the native side measures, and the
+  # body is clipped to the frame either way.
+  def test_wrapping_follows_the_measured_font_width_and_text_is_clipped_to_the_box
+    @scene.open_overlay(BotOps::Overlay.new("t").block("Input", "y" * 400))
+    widest = ->(c) { c.cmds.select { |x| x.op == :text && x.a[0].start_with?("y") }.map { |x| x.a[0].length }.max }
+    nominal = widest.(@scene.build)
+    @scene.mono_char = 6.6 # pixel rounding made characters wider at this zoom
+    wider = widest.(@scene.build)
+    assert_operator wider, :<, nominal, "fewer columns when characters are wider"
+    bx, _, bw, = overlay_box
+    assert_operator 24 + wider * 6.6, :<=, bw - 38, "the widest line fits inside the clip"
+    ops = @scene.build.cmds.map(&:op)
+    assert_equal ops.count(:clip), ops.count(:unclip)
+    assert_operator ops.count(:clip), :>=, 2, "title and body are clipped"
+  end
+
   def test_long_lines_wrap_to_the_box
     lines = BotOps::Overlay.new("t").block("Input", "x" * 95).lines(40)
     assert_equal [[:heading, "Input"], [:mono, "x" * 40], [:mono, "x" * 40], [:mono, "x" * 15]], lines
