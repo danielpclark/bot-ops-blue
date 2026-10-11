@@ -103,16 +103,18 @@ module BotOps
     OPS = { rect: "r", circle: "c", line: "l", wedge: "w", area: "a", text: "t", image: "i", polyline: "p" }.freeze
 
     # Compact JSON understood by ext/bot_ops_native (see src/lib.rs).
-    def to_frame(drag: nil)
+    # drag: the region that moves the window; resize: the grip that resizes it.
+    def to_frame(drag: nil, resize: nil)
       {
         "cmds" => @cmds.map { |c| [OPS[c.op]] + encode_args(c) },
         "hits" => @hits.each_with_index.map { |h, i| [h.x, h.y, h.w, h.h, i] },
-        "drag" => drag
+        "drag" => drag,
+        "resize" => resize
       }
     end
 
-    def to_json(drag: nil)
-      JSON.generate(to_frame(drag: drag))
+    def to_json(drag: nil, resize: nil)
+      JSON.generate(to_frame(drag: drag, resize: resize))
     end
 
     # ---- SVG export (tests, previews) -------------------------------------

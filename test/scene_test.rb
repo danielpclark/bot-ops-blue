@@ -98,8 +98,17 @@ class SceneTest < Minitest::Test
     lines = -> { canvas.cmds.count { |c| c.op == :line } }
     out = lines.call
     @host.fullscreen = true
-    assert_equal out, lines.call, "same number of strokes"
+    assert_equal out - 3, lines.call, "same strokes, minus the resize grip's three (none in fullscreen)"
     refute_equal canvas.to_svg, (@host.fullscreen = false; canvas.to_svg), "but drawn differently"
+  end
+
+  def test_resize_grip_sits_in_the_bottom_right_corner_and_reaches_the_native_side
+    @scene.resize(1820, 1024)
+    assert_equal [1820 - 16, 1024 - 16, 16, 16], @scene.resize_grip
+    @host.fullscreen = true
+    assert_nil @scene.resize_grip, "no grip in fullscreen"
+    host = BotOps::NativeHost.new(channel: BotOps::Comms::Channel.new)
+    assert_equal [1536 - 16, 1024 - 16, 16, 16], JSON.parse(host.poll)["resize"]
   end
 
   def test_header_drag_region_excludes_controls

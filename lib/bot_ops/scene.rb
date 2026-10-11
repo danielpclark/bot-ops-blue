@@ -36,6 +36,7 @@ module BotOps
       draw_header
       draw_sidebar
       @c.group(Layout::CONTENT_X, Layout::CONTENT_Y) { draw_page(@store.page) }
+      draw_resize_grip if resize_grip
       draw_overlay(@store.overlay) if @store.overlay
       @c
     end
@@ -244,6 +245,25 @@ module BotOps
     def select_session(id)
       @store.selected_session_id = id
       @host.invalidate
+    end
+
+    # ---- resize grip -------------------------------------------------------
+
+    GRIP = 16
+
+    # The bottom-right corner that resizes the window ([x, y, w, h]); none in
+    # fullscreen.
+    def resize_grip
+      return nil if @host.respond_to?(:fullscreen?) && @host.fullscreen?
+      [@width - GRIP, @height - GRIP, GRIP, GRIP]
+    end
+
+    # Three short diagonal strokes, the usual corner grip.
+    def draw_resize_grip
+      x, y, = resize_grip
+      [4, 8, 12].each do |d|
+        @c.line(x + GRIP - 3, y + GRIP - 3 - d, x + GRIP - 3 - d, y + GRIP - 3, stroke: col(MUTED, 0.7), strokewidth: 1.2)
+      end
     end
 
     # ---- detail overlay ----------------------------------------------------

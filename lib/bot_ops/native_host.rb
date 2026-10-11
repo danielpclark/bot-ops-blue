@@ -110,7 +110,7 @@ module BotOps
       return "" unless @dirty
       @dirty = false
       @canvas = @scene.build
-      @canvas.to_json(drag: [0, 0, @scene.width, Layout::HEADER_H])
+      @canvas.to_json(drag: [0, 0, @scene.width, Layout::HEADER_H], resize: @scene.resize_grip)
     end
 
     # The window's size in points changed (fullscreen, resize); lay out again.

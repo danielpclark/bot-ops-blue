@@ -34,6 +34,8 @@ struct Frame {
     hits: Vec<(f32, f32, f32, f32, u32)>,
     #[serde(default)]
     drag: Option<(f32, f32, f32, f32)>,
+    #[serde(default)]
+    resize: Option<(f32, f32, f32, f32)>,
 }
 
 struct HubApp {
@@ -61,12 +63,17 @@ struct HubApp {
     poll_failures: u32,
     /// Scrolling not yet sent to Ruby, in lines.
     scroll_lines: f32,
+    /// While the grip is held: window size minus pointer, in unzoomed points.
+    resizing: Option<Vec2>,
 }
 
 /// Images Ruby can draw by name, embedded at build time. lib/bot_ops/canvas.rb
 /// reads the same files for SVG previews.
 const IMAGES: &[(&str, &[u8])] = &[("logo", include_bytes!("../assets/logo.png"))];
 const ICON_PNG: &[u8] = include_bytes!("../assets/icon.png");
+
+/// The smallest window the resize grip allows, in points.
+const MIN_SIZE: Vec2 = Vec2::new(768.0, 512.0);
 
 const BACKGROUND: Color32 = Color32::from_rgb(5, 11, 20); // Theme::BG
 
@@ -314,6 +321,14 @@ impl HubApp {
         if is_fullscreen(ctx) {
             return;
         }
+        if let Some((x, y, w, h)) = self.frame.resize {
+            if Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h)).contains(pos) {
+                // Remember where in the corner it was grabbed, in unzoomed points.
+                let zoom = ctx.zoom_factor();
+                self.resizing = Some(ctx.screen_rect().size() * zoom - pos.to_vec2() * zoom);
+                return;
+            }
+        }
         if let Some((x, y, w, h)) = self.frame.drag {
             if Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h)).contains(pos) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
@@ -341,6 +356,29 @@ impl HubApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(self.decorated));
             }
             _ => {}
+        }
+    }
+
+    // Dragging the bottom-right grip: the window's size follows the pointer
+    // (top-left stays put). winit can't start a native resize from a grip on
+    // macOS, so this sets the size itself. Sizes are worked out in unzoomed
+    // points because the zoom changes as the window does.
+    fn handle_resize(&mut self, ctx: &egui::Context) {
+        let over_grip = |p: Pos2| {
+            self.frame.resize.map_or(false, |(x, y, w, h)| Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h)).contains(p))
+        };
+        if self.resizing.is_some() || ctx.input(|i| i.pointer.hover_pos()).map_or(false, over_grip) {
+            ctx.set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+        }
+        let Some(grab) = self.resizing else { return };
+        if !ctx.input(|i| i.pointer.primary_down()) {
+            self.resizing = None;
+            return;
+        }
+        if let Some(p) = ctx.input(|i| i.pointer.latest_pos()) {
+            let zoom = ctx.zoom_factor();
+            let target = (p.to_vec2() * zoom + grab).max(MIN_SIZE);
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(target / zoom));
         }
     }
 
@@ -538,6 +576,7 @@ impl eframe::App for HubApp {
         self.sync_window_state(ctx);
         self.handle_keys(ctx);
         self.handle_scroll(ctx);
+        self.handle_resize(ctx);
         self.poll_ruby(ctx);
 
         if ctx.input(|i| i.pointer.primary_pressed()) {
@@ -621,7 +660,8 @@ rutie::methods!(
         let mut viewport = egui::ViewportBuilder::default()
             .with_title(title.clone())
             .with_decorations(false)
-            .with_resizable(false)
+            .with_resizable(true)
+            .with_min_inner_size([MIN_SIZE.x, MIN_SIZE.y])
             .with_inner_size([w, h]);
         // On macOS the window is placed through AppKit before it is first
         // shown (see place_window); elsewhere egui positions it.
@@ -681,6 +721,7 @@ rutie::methods!(
                             minimize_at: None,
                             poll_failures: 0,
                             scroll_lines: 0.0,
+                            resizing: None,
                         }))
                     }),
                 )
