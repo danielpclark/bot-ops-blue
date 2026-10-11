@@ -12,7 +12,7 @@ module BotOps
   class Overlay
     Section = Struct.new(:kind, :label, :text)
 
-    attr_reader :title, :subtitle, :sections
+    attr_reader :title, :subtitle, :sections, :tabs
     attr_accessor :offset, :x_offset
 
     def initialize(title, subtitle: nil)
@@ -21,6 +21,13 @@ module BotOps
       @sections = []
       @offset = 0
       @x_offset = 0.0
+    end
+
+    # Tabs in the header, such as time ranges: `labels`, the `active` one,
+    # and a block that returns the overlay to show for a label.
+    def tabs!(labels, active, &select)
+      @tabs = { labels: labels, active: active, select: select }
+      self
     end
 
     def field(label, value)

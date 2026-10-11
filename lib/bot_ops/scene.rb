@@ -399,7 +399,14 @@ module BotOps
       electric_frame(bx, by, bw, bh, curve: 9)
       @c.hit(bx, by, bw, bh) {}
 
-      @c.clip(bx + 16, by + 8, bw - 72, 44) do
+      tabs_w = 0
+      if (t = o.tabs)
+        tabs_w = t[:labels].size * 52
+        t[:labels].each_with_index do |label, i|
+          tab(bx + bw - 56 - tabs_w + i * 52, by + 16, label, label == t[:active], width: 46) { open_overlay(t[:select].call(label)) }
+        end
+      end
+      @c.clip(bx + 16, by + 8, bw - 72 - tabs_w, 44) do
         txt(clip(o.title, (bw - 90) / 8), bx + 22, by + 14, size: 13, color: TEXT, weight: :bold)
         txt(clip(o.subtitle, (bw - 60) / 5.5), bx + 22, by + 36, size: 9, color: MUTED) if o.subtitle
       end

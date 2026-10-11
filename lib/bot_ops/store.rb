@@ -227,20 +227,28 @@ module BotOps
 
     # ---- usage -------------------------------------------------------------
 
-    # A snapshot's usage rows: [hour, project, model, out, in, cache_read,
-    # cache_write, tools, prompts, errors]. Snapshots without them (cloud
-    # sessions, older agents) are read from their 24h "hourly" table instead.
+    # A snapshot's usage rows: [hour, project, model, client, out, in,
+    # cache_read, cache_write, tools, prompts, errors]. Agents from before the
+    # client column are padded; snapshots without usage are read from their
+    # 24h "hourly" table.
     def self.usage_rows(snap)
-      return snap["usage"] if snap["usage"].is_a?(Array)
-      Array(snap["hourly"]).map { |hour, out, tools, prompts, errors| [hour, "", "", out.to_i, 0, 0, 0, tools.to_i, prompts.to_i, errors.to_i] }
+      if snap["usage"].is_a?(Array)
+        return snap["usage"].map { |r| r.size == 10 ? r.dup.insert(3, "") : r }
+      end
+      Array(snap["hourly"]).map { |hour, out, tools, prompts, errors| [hour, "", "", "", out.to_i, 0, 0, 0, tools.to_i, prompts.to_i, errors.to_i] }
     end
+
+    # Positions in a usage row as Store#usage returns it (source first).
+    U = %i[source hour project model client out in cache_read cache_write tools prompts errors]
+        .each_with_index.to_h.freeze
 
     def self.current_hour(now = Time.now)
       (now.to_i / 3600) * 3600
     end
 
-    # [[source, hour, project, model, out, in, cache_read, cache_write,
-    # tools, prompts, errors], ...] for the last `hours` hours, every source.
+    # [[source, hour, project, model, client, out, in, cache_read,
+    # cache_write, tools, prompts, errors], ...] for the last `hours` hours,
+    # every source.
     def usage(hours = 24)
       cached([:usage, hours]) do
         since = Store.current_hour - (hours - 1) * 3600
@@ -259,7 +267,7 @@ module BotOps
     def hourly(hours = 24)
       cached([:hourly, hours]) do
         sums = Hash.new { |h, k| h[k] = [0, 0, 0, 0] }
-        usage(hours).each do |_, hour, _, _, out, _, _, _, tools, prompts, errors|
+        usage(hours).each do |_, hour, _, _, _, out, _, _, _, tools, prompts, errors|
           row = sums[hour]
           row[0] += out
           row[1] += tools
@@ -283,22 +291,30 @@ module BotOps
 
     TOKEN_KINDS = %w[out in cache_read cache_write].freeze
 
-    # Tokens over the last `hours`: totals per kind, and output (with the
-    # other kinds) grouped by project, model and hour; sessions by their own
-    # totals. Cloud sessions report no tokens.
+    CLIENT_NAMES = { "cli" => "CLI", "claude-vscode" => "VS Code", "cloud" => "claude.ai", "claude-desktop" => "Desktop",
+                     "sdk-cli" => "SDK", "sdk-ts" => "SDK", "sdk-py" => "SDK" }.freeze
+
+    def self.client_name(entrypoint)
+      CLIENT_NAMES[entrypoint] || (entrypoint.to_s.empty? ? "(unknown)" : entrypoint)
+    end
+
+    # Tokens over the last `hours`: totals per kind, and every kind grouped
+    # by client, project, model and hour (by day past two days); sessions by
+    # their own totals.
     def token_breakdown(hours = 24)
       cached([:tokens, hours]) do
         totals = Hash.new(0)
-        by = { project: Hash.new { |h, k| h[k] = Hash.new(0) }, model: Hash.new { |h, k| h[k] = Hash.new(0) },
-               hour: Hash.new { |h, k| h[k] = Hash.new(0) } }
-        usage(hours).each do |_, hour, project, model, *counts|
+        by = Hash.new { |h, dim| h[dim] = Hash.new { |g, k| g[k] = Hash.new(0) } }
+        step = hours > 48 ? 86_400 : 3600
+        usage(hours).each do |_, hour, project, model, client, *counts|
           TOKEN_KINDS.each_with_index do |kind, i|
             n = counts[i].to_i
             next if n.zero?
             totals[kind] += n
-            by[:project][project.empty? ? "(cloud)" : project][kind] += n
+            by[:client][Store.client_name(client)][kind] += n
+            by[:project][project.empty? ? "(unknown)" : project][kind] += n
             by[:model][model.empty? ? "(unknown)" : model][kind] += n
-            by[:hour][hour][kind] += n
+            by[:period][Time.at(hour).then { |t| step == 3600 ? hour : Time.local(t.year, t.month, t.day).to_i }][kind] += n
           end
         end
         reads = totals["cache_read"]
@@ -307,7 +323,8 @@ module BotOps
           t = s["tokens"] || {}
           [Store.display_name(s), t] if t.values.any? { |v| v.to_i.positive? }
         end.sort_by { |_, t| -t["out"].to_i }
-        { totals: totals, by_project: by[:project], by_model: by[:model], by_hour: by[:hour], by_session: sessions,
+        { totals: totals, by_client: by[:client], by_project: by[:project], by_model: by[:model], by_period: by[:period],
+          period: step, by_session: sessions,
           cache_hit: prompt_side.positive? ? reads.to_f / prompt_side : nil }
       end
     end
@@ -429,7 +446,8 @@ module BotOps
       n = n.to_i
       return n.to_s if n < 1000
       return format("%.1fk", n / 1000.0).sub(".0k", "k") if n < 1_000_000
-      format("%.1fM", n / 1_000_000.0).sub(".0M", "M")
+      return format("%.1fM", n / 1_000_000.0).sub(".0M", "M") if n < 999_950_000
+      format("%.1fB", n / 1_000_000_000.0).sub(".0B", "B")
     end
 
     # "claude-opus-5-5" -> "Opus 5.5"

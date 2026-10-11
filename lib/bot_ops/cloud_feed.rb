@@ -26,7 +26,10 @@ module BotOps
       @mutex = Mutex.new
       @sessions = {}
       @events = []
-      @buckets = Hash.new { |h, k| h[k] = [0, 0, 0, 0] } # hour => [out_tokens, tools, prompts, errors]
+      @buckets = Hash.new { |h, k| h[k] = [0, 0, 0] } # [project, hour] => [tools, prompts, errors]
+      # [session, hour, model] => [out, in, cache_read, cache_write]: running
+      # totals the reporter reads from the session's transcript.
+      @tokens = {}
       replay
     end
 
@@ -58,6 +61,7 @@ module BotOps
           "recent" => recent.map { |s| s.merge("status" => "ended") },
           "events" => @events.select { |ev| ev["at"] >= t - WINDOW_S }.sort_by { |ev| -ev["at"] }.first(EVENT_LIMIT),
           "hourly" => hourly(t),
+          "usage" => usage,
           "projects" => projects(sessions)
         }
       end
@@ -85,6 +89,8 @@ module BotOps
       end
       s["last_at"] = [s["last_at"], at].max
       hour = (at.to_i / 3600) * 3600
+      project = File.basename(s["cwd"].to_s)
+      take_tokens(s, e)
       case e["hook_event_name"]
       when "UserPromptSubmit"
         text = e["prompt"].to_s.strip
@@ -93,7 +99,7 @@ module BotOps
         s["prompt_at"] = [s["prompt_at"].to_f, at].max
         s["last_prompt"] = text.lines.first.to_s.strip[0, 160]
         s["title"] ||= s["last_prompt"][0, 80] unless text.empty? || s["titled"]
-        @buckets[hour][2] += 1
+        @buckets[[project, hour]][1] += 1
         event(s, at, "prompt", "prompt", s["last_prompt"])
       when "PostToolUse", "PostToolUseFailure"
         failed = e["error"] || e["hook_event_name"] == "PostToolUseFailure"
@@ -101,11 +107,11 @@ module BotOps
         s["tool_calls"] += 1
         s["last_tool"] = { "name" => e["tool_name"].to_s, "detail" => e["detail"].to_s, "at" => at }
         s.delete("attention")
-        @buckets[hour][1] += 1
+        @buckets[[project, hour]][0] += 1
         event(s, at, "tool", e["tool_name"].to_s, e["detail"].to_s)
         if failed
           s["errors"] += 1
-          @buckets[hour][3] += 1
+          @buckets[[project, hour]][2] += 1
           event(s, at, "error", "tool error", "#{e['tool_name']}: #{e['detail']}")
         end
       when "Notification"
@@ -133,14 +139,43 @@ module BotOps
       @events.shift(@events.size - EVENT_LIMIT) if @events.size > EVENT_LIMIT * 2
     end
 
+    # Token counts from reporters that send them: per-hour, per-model running
+    # totals for the session (the largest seen wins, since hook processes can
+    # finish out of order), the session's totals and its context size.
+    def take_tokens(s, e)
+      Array(e["usage"]).each do |hour, model, *counts|
+        next unless hour.is_a?(Integer) && model.is_a?(String) && counts.size == 4 && counts.all?(Integer)
+        key = [s["id"], hour, model]
+        @tokens[key] = (@tokens[key] || [0, 0, 0, 0]).zip(counts).map(&:max)
+      end
+      if e["tokens"].is_a?(Hash)
+        e["tokens"].each { |k, v| s["tokens"][k] = [s["tokens"][k].to_i, v].max if %w[out in cache_read cache_write].include?(k) && v.is_a?(Integer) }
+      end
+      s["context"] = e["context"] if e["context"].is_a?(Integer)
+    end
+
+    # Rows shaped like Probe#snapshot's "usage", client "cloud".
+    def usage
+      rows = @tokens.map do |(sid, hour, model), counts|
+        [hour, File.basename(@sessions.dig(sid, "cwd").to_s), model, "cloud", *counts, 0, 0, 0]
+      end
+      rows + @buckets.map { |(project, hour), counts| [hour, project, "", "cloud", 0, 0, 0, 0, *counts] }
+    end
+
     def hourly(t)
       first = (t.to_i / 3600) * 3600 - 23 * 3600
-      (0..23).map { |i| h = first + i * 3600; [h, *@buckets[h]] }
+      sums = Hash.new { |h, k| h[k] = [0, 0, 0, 0] }
+      usage.each do |hour, _, _, _, out, _, _, _, tools, prompts, errors|
+        sums[hour] = sums[hour].zip([out, tools, prompts, errors]).map(&:sum)
+      end
+      (0..23).map { |i| h = first + i * 3600; [h, *sums[h]] }
     end
 
     def projects(sessions)
       sessions.group_by { |s| s["cwd"].to_s }.map do |cwd, list|
-        { "cwd" => cwd, "sessions" => list.size, "out_tokens" => 0, "tool_calls" => list.sum { |s| s["tool_calls"] },
+        ids = list.map { |s| s["id"] }
+        out = @tokens.sum { |(sid, hour, _), c| ids.include?(sid) && hour >= Time.now.to_i - WINDOW_S ? c[0] : 0 }
+        { "cwd" => cwd, "sessions" => list.size, "out_tokens" => out, "tool_calls" => list.sum { |s| s["tool_calls"] },
           "prompts" => list.sum { |s| s["prompts"] }, "last_at" => list.map { |s| s["last_at"] }.max,
           "branch" => list.map { |s| s["branch"] }.compact.first }
       end

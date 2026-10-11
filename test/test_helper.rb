@@ -34,8 +34,8 @@ module Fixtures
         { "at" => now - 90, "sid" => "s-busy", "project" => "api", "kind" => "prompt", "title" => "prompt", "detail" => "fix the flaky login test" }
       ],
       "hourly" => [[hour - 3600, 1200, 5, 1, 0], [hour, 3000, 9, 2, 1]],
-      "usage" => [[hour - 3600, "api", "claude-opus-5-5", 1200, 5, 40_000, 1000, 5, 1, 0],
-                  [hour, "api", "claude-opus-5-5", 3000, 5, 50_000, 2000, 9, 2, 1]],
+      "usage" => [[hour - 3600, "api", "claude-opus-5-5", "cli", 1200, 5, 40_000, 1000, 5, 1, 0],
+                  [hour, "api", "claude-opus-5-5", "cli", 3000, 5, 50_000, 2000, 9, 2, 1]],
       "projects" => [{ "cwd" => "/src/api", "out_tokens" => 4200, "tool_calls" => 14, "prompts" => 3, "sessions" => 1,
                        "last_at" => now - 5, "branch" => "main" }]
     }

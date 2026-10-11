@@ -254,7 +254,7 @@ module BotOps
         @sessions = {}
         @seen = {}
         @events = []
-        # [cwd, hour, model] => USAGE_FIELDS counts (model "" for tool/prompt/error counts)
+        # [cwd, hour, model, client] => USAGE_FIELDS counts (model "" for tool/prompt/error counts)
         @buckets = Hash.new { |h, k| h[k] = Array.new(USAGE_FIELDS.size, 0) }
         @usage_days = full_detail ? USAGE_DAYS_FULL : USAGE_DAYS_AGENT
         @pending_tools = {} # tool_use_id => [started at, tool name, its event or nil]
@@ -284,16 +284,17 @@ module BotOps
       # [[hour_start_epoch, out_tokens, tool_calls, prompts, errors], ...] oldest first.
       def hourly(now)
         sums = Hash.new { |h, k| h[k] = [0, 0, 0, 0] }
-        @buckets.each { |(_, hour, _), v| sums[hour] = sums[hour].zip(v.values_at(OUT, TOOLS, PROMPTS, ERRORS)).map(&:sum) }
+        @buckets.each { |(_, hour, _, _), v| sums[hour] = sums[hour].zip(v.values_at(OUT, TOOLS, PROMPTS, ERRORS)).map(&:sum) }
         first = hour_of(now.to_f) - 23 * 3600
         (0..23).map { |i| h = first + i * 3600; [h, *sums[h]] }
       end
 
-      # [[hour, project, model, out, in, cache_read, cache_write, tools,
-      # prompts, errors], ...] for the usage window, non-zero rows only.
+      # [[hour, project, model, client, out, in, cache_read, cache_write,
+      # tools, prompts, errors], ...] for the usage window, non-zero rows only.
+      # client is the session's entrypoint ("cli", "claude-vscode", ...).
       def usage(_now)
-        @buckets.filter_map do |(cwd, hour, model), v|
-          [hour, File.basename(cwd), model, *v] if v.any?(&:positive?)
+        @buckets.filter_map do |(cwd, hour, model, client), v|
+          [hour, File.basename(cwd), model, client, *v] if v.any?(&:positive?)
         end.sort_by(&:first)
       end
 
@@ -314,7 +315,7 @@ module BotOps
       def projects(now)
         cutoff = now.to_f - WINDOW_S
         by_cwd = Hash.new { |h, k| h[k] = { "out_tokens" => 0, "tool_calls" => 0, "prompts" => 0 } }
-        @buckets.each do |(cwd, hour, _), v|
+        @buckets.each do |(cwd, hour, _, _), v|
           next if hour < cutoff - 3600
           out, tools, prompts = v.values_at(OUT, TOOLS, PROMPTS)
           p = by_cwd[cwd]
@@ -372,6 +373,7 @@ module BotOps
         s["last_at"] = [s["last_at"].to_f, at].max if at
         recent = at && at >= cutoff
         @counted = at && at >= @usage_cutoff.to_f
+        @client = s["entrypoint"] || d["entrypoint"]
         case d["type"]
         # A title given by hand (/rename, the claude.ai sidebar) beats the generated one.
         when "ai-title" then s["title"] = d["aiTitle"] unless sidechain || s["custom_title"]
@@ -465,7 +467,7 @@ module BotOps
       end
 
       def bucket(s, at, model = "")
-        @buckets[[s["cwd"].to_s, hour_of(at), model]]
+        @buckets[[s["cwd"].to_s, hour_of(at), model, @client.to_s]]
       end
 
       def hour_of(t)
@@ -482,7 +484,7 @@ module BotOps
       end
 
       def prune(now)
-        @buckets.delete_if { |(_, hour, _), _| hour < @usage_cutoff }
+        @buckets.delete_if { |(_, hour, _, _), _| hour < @usage_cutoff }
         # A call still pending after a day never got its result.
         @pending_tools.delete_if { |_, (started, _, _)| started < now.to_f - WINDOW_S }
       end

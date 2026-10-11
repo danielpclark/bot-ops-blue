@@ -27,11 +27,14 @@ Only these fields leave the session: session id, event name, cwd, git
 branch, model, the session's claude.ai URL, its title when the transcript
 has one (cloud transcripts usually don't), a 300-character prompt excerpt,
 the tool name and a 160-character detail (command, file path, pattern or
-URL), and notification text. File contents and tool output are never sent.
+URL), notification text, and token counts (per hour and model, read from
+the transcript's usage records, subagents included). File contents and
+tool output are never sent.
 
 Standard library only (Python 3.6+).
 """
 import base64
+import calendar
 import json
 import os
 import re
@@ -88,48 +91,107 @@ def trim(payload):
 
 
 TITLE_CACHE = os.path.expanduser("~/.cache/bot-ops-blue")
+TOKEN_KEYS = (("output_tokens", 0), ("input_tokens", 1), ("cache_read_input_tokens", 2),
+              ("cache_creation_input_tokens", 3))
+KEEP_HOURS = 48
 
 
-def session_title(transcript, session_id):
-    """The session's title: the latest name it was given by hand (custom-title),
-    else the latest generated one (ai-title), as the claude.ai sidebar shows.
-    Reads only what was appended since the previous event (offset cached)."""
+def read_new(path, state, on_record):
+    """Calls on_record for each whole JSON line appended to `path` since the
+    offset kept in state["files"]; a file that shrank is read again."""
+    offsets = state.setdefault("files", {})
+    offset = offsets.get(path, 0)
+    if os.path.getsize(path) < offset:
+        offset = 0
+    with open(path, "rb") as f:
+        f.seek(offset)
+        for line in f:
+            if not line.endswith(b"\n"):
+                break  # partial line; read it next time
+            offset += len(line)
+            if b"-title" in line or b'"usage"' in line:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(rec, dict):
+                    on_record(rec, path)
+    offsets[path] = offset
+
+
+def scan_transcript(transcript, session_id):
+    """Reads what the session's transcript (and its subagents' transcripts)
+    gained since the previous event: the session's title, the latest name
+    given by hand (custom-title) else the generated one (ai-title), as the
+    claude.ai sidebar shows; and token usage, summed per hour and model.
+    Returns (title, usage rows for the hours that changed, session token
+    totals, context size). State is cached between events."""
     if not transcript or not os.path.isfile(transcript):
-        return None
+        return None, [], None, None
     cache = os.path.join(TITLE_CACHE, "".join(c for c in session_id if c.isalnum() or c in "-_") + ".json")
     try:
         with open(cache) as f:
             state = json.load(f)
     except Exception:
         state = {}
-    offset = state.get("offset", 0)
-    if os.path.getsize(transcript) < offset:
-        offset, state = 0, {}
-    with open(transcript, "rb") as f:
-        f.seek(offset)
-        for line in f:
-            if not line.endswith(b"\n"):
-                break  # partial line; read it next time
-            offset += len(line)
-            if b"-title" not in line:
-                continue
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            if rec.get("type") == "custom-title" and rec.get("customTitle"):
-                state["custom"] = rec["customTitle"]
-            elif rec.get("type") == "ai-title" and rec.get("aiTitle"):
-                state["ai"] = rec["aiTitle"]
-    state["offset"] = offset
+    if "files" not in state:
+        state = {}  # a cache from before token counts: read everything again
+    hours = state.setdefault("hours", {})     # "hour|model" -> [out, in, cache_read, cache_write]
+    totals = state.setdefault("tokens", [0, 0, 0, 0])
+    last_id = state.setdefault("last_id", {})  # per file: a message's blocks repeat its usage
+    changed = set()
+
+    def on_record(rec, path):
+        if rec.get("type") == "custom-title" and rec.get("customTitle"):
+            state["custom"] = rec["customTitle"]
+        elif rec.get("type") == "ai-title" and rec.get("aiTitle"):
+            state["ai"] = rec["aiTitle"]
+        msg = rec.get("message")
+        if rec.get("type") != "assistant" or not isinstance(msg, dict) or not isinstance(msg.get("usage"), dict):
+            return
+        mid = msg.get("id")
+        if mid and last_id.get(path) == mid:
+            return
+        last_id[path] = mid
+        usage = msg["usage"]
+        try:
+            stamp = calendar.timegm(time.strptime(rec.get("timestamp", "")[:19], "%Y-%m-%dT%H:%M:%S"))
+        except ValueError:
+            stamp = time.time()
+        key = "%d|%s" % (int(stamp) // 3600 * 3600, msg.get("model") or "")
+        row = hours.setdefault(key, [0, 0, 0, 0])
+        for name, i in TOKEN_KEYS:
+            n = usage.get(name)
+            if isinstance(n, int):
+                row[i] += n
+                totals[i] += n
+        if path == transcript:
+            state["context"] = sum(usage.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens",
+                                                                  "cache_creation_input_tokens"))
+        changed.add(key)
+
+    read_new(transcript, state, on_record)
+    subagents = os.path.join(transcript[:-len(".jsonl")], "subagents")
+    if transcript.endswith(".jsonl") and os.path.isdir(subagents):
+        for name in sorted(os.listdir(subagents)):
+            if name.endswith(".jsonl"):
+                read_new(os.path.join(subagents, name), state, on_record)
+
+    oldest = int(time.time()) // 3600 * 3600 - KEEP_HOURS * 3600
+    for key in [k for k in hours if int(k.split("|")[0]) < oldest]:
+        del hours[key]
     try:
         os.makedirs(TITLE_CACHE, exist_ok=True)
-        with open(cache, "w") as f:
+        tmp = cache + ".tmp%d" % os.getpid()
+        with open(tmp, "w") as f:
             json.dump(state, f)
+        os.replace(tmp, cache)  # concurrent hooks: each writes a whole, consistent state
     except OSError:
         pass
     title = state.get("custom") or state.get("ai")
-    return title.strip()[:120] if title else None
+    rows = [[int(k.split("|")[0]), k.split("|", 1)[1]] + hours[k] for k in sorted(changed) if k in hours]
+    tokens = dict(zip(("out", "in", "cache_read", "cache_write"), totals))
+    return (title.strip()[:120] if title else None), rows, tokens, state.get("context")
 
 
 def main():
@@ -146,9 +208,15 @@ def main():
     try:
         os.setsid()
         try:
-            title = session_title(payload.get("transcript_path"), ev["session_id"])
+            title, usage, tokens, context = scan_transcript(payload.get("transcript_path"), ev["session_id"])
             if title:
                 ev["title"] = title
+            if usage:
+                ev["usage"] = usage  # [[hour, model, out, in, cache_read, cache_write], ...] running totals
+            if tokens and any(tokens.values()):
+                ev["tokens"] = tokens
+            if context:
+                ev["context"] = context
         except Exception:
             pass
         body = json.dumps(ev).encode()

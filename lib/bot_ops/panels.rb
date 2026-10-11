@@ -442,22 +442,30 @@ module BotOps
       whole.to_f.positive? ? "#{(part * 100.0 / whole).round(1)}%" : "—"
     end
 
-    def tokens_overlay(hours = 24)
-      tb = @store.token_breakdown(hours)
+    TOKEN_RANGES = { "24h" => 24, "7d" => 168, "30d" => 720 }.freeze
+
+    def tokens_overlay(range = "24h")
+      tb = @store.token_breakdown(TOKEN_RANGES.fetch(range))
       t = tb[:totals]
-      o = Overlay.new("Output tokens", subtitle: "Last #{hours} hours, every machine")
+      o = Overlay.new("Tokens", subtitle: "#{RANGE_LABEL[range] || "Last #{range}"}, every machine and claude.ai")
+      o.tabs!(TOKEN_RANGES.keys, range) { |r| tokens_overlay(r) }
       o.field("Output", Store.count(t["out"]))
       o.field("Input", Store.count(t["in"]))
       o.field("Cache read", Store.count(t["cache_read"]))
       o.field("Cache write", Store.count(t["cache_write"]))
+      o.field("Total input", "#{Store.count(t['in'] + t['cache_read'] + t['cache_write'])}  (input + cache read + cache write: everything sent to the model)")
       o.field("Cache hit", tb[:cache_hit] && "#{(tb[:cache_hit] * 100).round(1)}% of prompt tokens were read from cache")
       kinds = ->(x) { [Store.count(x["out"]), Store.count(x["in"]), Store.count(x["cache_read"]), Store.count(x["cache_write"])] }
       head = %w[output input cache\ read cache\ write]
+      o.block("By client", table(["client", *head], tb[:by_client].sort_by { |_, x| -x["out"] }.map { |c, x| [c, *kinds.(x)] }))
       o.block("By model", table(["model", *head], tb[:by_model].sort_by { |_, x| -x["out"] }.map { |m, x| [Store.model_name(m), *kinds.(x)] }))
       o.block("By project", table(["project", *head], tb[:by_project].sort_by { |_, x| -x["out"] }.map { |pr, x| [pr, *kinds.(x)] }))
-      o.block("By hour", table(["hour", *head], tb[:by_hour].sort_by(&:first).reverse.map { |hr, x| [Time.at(hr).strftime("%a %H:00"), *kinds.(x)] }))
-      o.block("By session (whole session so far)", table(["session", *head], tb[:by_session].first(30).map { |n, x| [n.to_s[0, 60], *kinds.(x)] }))
-      o.note("Cloud sessions report no token counts (Claude Code's hooks don't receive usage), so they're not included here.")
+      day = tb[:period] == 86_400
+      o.block(day ? "By day" : "By hour", table([day ? "day" : "hour", *head],
+                                                tb[:by_period].sort_by(&:first).reverse.map { |at, x| [Time.at(at).strftime(day ? "%a %b %-d" : "%a %H:00"), *kinds.(x)] }))
+      o.block("By session (whole session so far, sessions from the last 12 hours)",
+              table(["session", *head], tb[:by_session].first(30).map { |n, x| [n.to_s[0, 60], *kinds.(x)] }))
+      o.note("claude.ai sessions report tokens once their environment runs the updated setup script (cloud/setup.sh); before that they're missing here.")
       o
     end
 
@@ -533,7 +541,7 @@ module BotOps
       o.field("Output (24h)", "#{Store.count(p['out_tokens'])} tokens")
       o.field("Branches", sessions.map { |s| s["branch"] }.compact.uniq.join(", "))
       by_model = Hash.new(0)
-      @store.usage(24).each { |_, _, pr, model, out| by_model[model] += out if pr == name }
+      @store.usage(24).each { |r| by_model[r[Store::U[:model]]] += r[Store::U[:out]] if r[Store::U[:project]] == name }
       o.block("Output by model (24h)", table(%w[model output], by_model.reject { |_, v| v.zero? }.sort_by { |_, v| -v }.map { |m, v| [Store.model_name(m), Store.count(v)] }))
       o.block("Sessions", table(%w[status session client tools last\ worked], sessions.map { |s| [status_label(s), Store.display_name(s).to_s[0, 50], entry_name(s), s["tool_calls"].to_i, Store.ago(Store.worked_at(s))] }, left: [0, 1, 2]))
       files = @store.tool_events.select { |e| e["project"] == name && EDIT_TOOLS.include?(e["title"]) }.map { |e| e["detail"].to_s }.reject(&:empty?).tally
@@ -544,16 +552,18 @@ module BotOps
     # One chart column: `step` hours from `start`.
     def period_overlay(start, step)
       stop = start + step * 3600
-      rows = @store.usage([((Store.current_hour - start) / 3600) + 1, 1].max).select { |r| r[1] >= start && r[1] < stop }
-      sum = ->(i) { rows.sum { |r| r[i].to_i } }
+      u = Store::U
+      rows = @store.usage([((Store.current_hour - start) / 3600) + 1, 1].max).select { |r| r[u[:hour]] >= start && r[u[:hour]] < stop }
+      sum = ->(k) { rows.sum { |r| r[u[k]].to_i } }
       fmt = step == 24 ? "%a %b %-d" : "%a %b %-d, %H:00"
       o = Overlay.new("Usage #{Time.at(start).strftime(fmt)}#{step > 1 ? " – #{Time.at(stop).strftime(step == 24 ? '%a %b %-d' : '%H:00')}" : ''}",
                       subtitle: "Every machine")
-      o.field("Prompts", sum.(9))
-      o.field("Tool calls", sum.(8))
-      o.field("Errors", sum.(10))
-      o.field("Output tokens", Store.count(sum.(4)))
-      by_project = rows.group_by { |r| r[2].empty? ? "(cloud)" : r[2] }.map { |pr, rs| [pr, rs.sum { |r| r[9] }, rs.sum { |r| r[8] }, Store.count(rs.sum { |r| r[4] })] }
+      o.field("Prompts", sum.(:prompts))
+      o.field("Tool calls", sum.(:tools))
+      o.field("Errors", sum.(:errors))
+      o.field("Output tokens", Store.count(sum.(:out)))
+      by_project = rows.group_by { |r| r[u[:project]].empty? ? "(unknown)" : r[u[:project]] }
+                       .map { |pr, rs| [pr, rs.sum { |r| r[u[:prompts]] }, rs.sum { |r| r[u[:tools]] }, Store.count(rs.sum { |r| r[u[:out]] })] }
       o.block("By project", table(%w[project prompts tools output], by_project.sort_by { |r| -r[2] }))
       evs = @store.events.select { |e| e["at"].to_f >= start && e["at"].to_f < stop }.sort_by { |e| e["at"].to_f }
       if evs.empty?

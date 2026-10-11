@@ -9,8 +9,8 @@ module BotOps
   # snapshot covers (cloud and other machines report only a day) and survive
   # restarts.
   #
-  # Rows are [hour, project, model, out, in, cache_read, cache_write, tools,
-  # prompts, errors]: the shape of a Probe snapshot's "usage". A snapshot
+  # Rows are [hour, project, model, client, out, in, cache_read, cache_write,
+  # tools, prompts, errors]: the shape of a Probe snapshot's "usage". A snapshot
   # holds each hour's running totals, so recording keeps the larger of the
   # stored and new value for every count.
   # Where history and prefs live; BOT_OPS_CONFIG_DIR overrides it (tests).
@@ -24,16 +24,17 @@ module BotOps
     def initialize(path: PATH, save_every: 60)
       @path = path
       @save_every = save_every
-      @rows = {} # [source, hour, project, model] => counts
+      @rows = {} # [source, hour, project, model, client] => counts
       @saved_at = Time.now.to_f
       @dirty = false
       load
     end
 
     def record(source, rows, now: Time.now)
-      rows.each do |hour, project, model, *counts|
-        next unless hour.is_a?(Integer) && counts.size == COUNTS
-        key = [source, hour, project.to_s, model.to_s]
+      rows.each do |hour, project, model, client, *counts|
+        next unless hour.is_a?(Integer) && counts.size == COUNTS && counts.any? { |n| n.to_i.positive? }
+        key = [source, hour, project.to_s, model.to_s, client.to_s]
+        supersede(source, hour) unless key[4].empty?
         old = @rows[key]
         merged = old ? old.zip(counts).map { |a, b| [a, b.to_i].max } : counts.map(&:to_i)
         next if merged == old
@@ -43,14 +44,14 @@ module BotOps
       save if @dirty && now.to_f - @saved_at >= @save_every
     end
 
-    # [[source, hour, project, model, *counts], ...] since `hour`.
+    # [[source, hour, project, model, client, *counts], ...] since `hour`.
     def rows(since)
-      @rows.filter_map { |(source, hour, project, model), counts| [source, hour, project, model, *counts] if hour >= since }
+      @rows.filter_map { |key, counts| [*key, *counts] if key[1] >= since }
     end
 
     def save(now: Time.now)
       cutoff = now.to_f - KEEP_S
-      @rows.delete_if { |(_, hour, _, _), _| hour < cutoff }
+      @rows.delete_if { |key, _| key[1] < cutoff }
       FileUtils.mkdir_p(File.dirname(@path))
       tmp = "#{@path}.tmp"
       File.write(tmp, JSON.generate(@rows.map { |key, counts| key + counts }), perm: 0o600)
@@ -63,11 +64,23 @@ module BotOps
 
     private
 
+    # Rows without a client (saved before rows had one, or a source's
+    # tokenless fallback) count the same hour again once tagged rows arrive.
+    def supersede(source, hour)
+      stale = @rows.keys.select { |k| k[0] == source && k[1] == hour && k[4].empty? }
+      return if stale.empty?
+      stale.each { |k| @rows.delete(k) }
+      @dirty = true
+    end
+
     def load
       return unless File.exist?(@path)
       cutoff = Time.now.to_f - KEEP_S
-      JSON.parse(File.read(@path)).each do |source, hour, project, model, *counts|
-        @rows[[source, hour, project, model]] = counts if hour.is_a?(Integer) && hour >= cutoff && counts.size == COUNTS
+      JSON.parse(File.read(@path)).each do |row|
+        row.insert(4, "") if row.size == 4 + COUNTS # saved before rows had a client
+        source, hour, project, model, client, *counts = row
+        next unless hour.is_a?(Integer) && hour >= cutoff && counts.size == COUNTS && counts.any? { |n| n.to_i.positive? }
+        @rows[[source, hour, project, model, client]] = counts
       end
     rescue JSON::ParserError, SystemCallError
       @rows = {}

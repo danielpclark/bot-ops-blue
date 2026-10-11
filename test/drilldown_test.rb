@@ -62,12 +62,12 @@ class DrilldownTest < Minitest::Test
 
     usage = snap["usage"]
     assert_equal %w[claude-haiku-4-5-20251001 claude-opus-5-5], usage.map { |r| r[2] }.reject(&:empty?).uniq.sort
-    assert_equal 830, usage.sum { |r| r[3] }, "output over the week, old reply included"
-    assert_equal 3 * 1000, usage.sum { |r| r[5] }, "cache reads"
+    assert_equal 830, usage.sum { |r| r[4] }, "output over the week, old reply included"
+    assert_equal 3 * 1000, usage.sum { |r| r[6] }, "cache reads"
     assert_equal 130, snap["hourly"].sum { |r| r[1] }
 
     agent = BotOps::Probe.new(claude_dir: @tmp, host: "box").snapshot
-    assert_equal 130, agent["usage"].sum { |r| r[3] }, "agents report one day"
+    assert_equal 130, agent["usage"].sum { |r| r[4] }, "agents report one day"
   end
 
   # ---- history -------------------------------------------------------------
@@ -76,12 +76,16 @@ class DrilldownTest < Minitest::Test
     path = File.join(@tmp, "history.json")
     hour = BotOps::Store.current_hour
     h = BotOps::History.new(path: path, save_every: 0)
-    h.record("me@box", [[hour, "api", "m", 10, 1, 2, 3, 4, 5, 6]])
-    h.record("me@box", [[hour, "api", "m", 7, 1, 2, 3, 9, 5, 6]]) # a restarted probe that has re-read less
-    h.record("me@box", [[hour - 40 * 86_400, "api", "m", 1, 0, 0, 0, 0, 0, 0]])
+    h.record("me@box", [[hour, "api", "m", "cli", 10, 1, 2, 3, 4, 5, 6]])
+    h.record("me@box", [[hour, "api", "m", "cli", 7, 1, 2, 3, 9, 5, 6]]) # a restarted probe that has re-read less
+    h.record("me@box", [[hour - 40 * 86_400, "api", "m", "cli", 1, 0, 0, 0, 0, 0, 0]])
     h.save
     rows = BotOps::History.new(path: path).rows(hour - 60 * 86_400)
-    assert_equal [["me@box", hour, "api", "m", 10, 1, 2, 3, 9, 5, 6]], rows, "max per count; 30-day cut"
+    assert_equal [["me@box", hour, "api", "m", "cli", 10, 1, 2, 3, 9, 5, 6]], rows, "max per count; 30-day cut"
+
+    File.write(path, JSON.generate([["me@box", hour, "api", "m", 1, 2, 3, 4, 5, 6, 7]]))
+    assert_equal [["me@box", hour, "api", "m", "", 1, 2, 3, 4, 5, 6, 7]], BotOps::History.new(path: path).rows(0),
+                 "files from before the client column still load"
   end
 
   def test_a_history_backed_store_charts_sources_that_went_quiet
@@ -95,7 +99,7 @@ class DrilldownTest < Minitest::Test
   # ---- drill-downs -----------------------------------------------------------
 
   def test_header_stats_open_their_breakdowns
-    { "OUTPUT TOKENS" => "Output tokens", "TOOL CALLS (24H)" => "Tool calls", "PROMPTS (24H)" => "Prompts",
+    { "OUTPUT TOKENS" => "Tokens", "TOOL CALLS (24H)" => "Tool calls", "PROMPTS (24H)" => "Prompts",
       "LIVE SESSIONS" => "Claude sessions" }.each do |label, title|
       click_text(label)
       assert_equal title, @store.overlay&.title, label
