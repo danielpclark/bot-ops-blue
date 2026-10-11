@@ -1,11 +1,14 @@
 # Bot Ops Blue
 
-A borderless desktop operations dashboard for a fleet of bots. Ruby owns the
-data, layout and comms; a small Rust extension owns the window and rendering.
-It reproduces the reference mock-up in `assets/reference-mockup.png`: bot
-fleet, live activity, workflows, task queue, pipeline chart, system health
-gauges, recent activity, agent details, logs and reports, plus a sidebar that
-switches between full-size pages for each area.
+A borderless desktop dashboard for your **live Claude Code sessions**, on
+this machine and on any other machine that runs the small reporting agent.
+Ruby owns the data, layout and comms; a small Rust extension owns the window
+and rendering. The look follows the mock-up in `assets/reference-mockup.png`:
+live sessions, live activity, projects, tool calls, hourly usage, machine
+health, recent prompts, session details, an event log and a machine list,
+plus a sidebar that switches between full-size pages for each area.
+
+Nothing on screen is simulated. Panels with no data show an empty state.
 
 ![Bot Ops Blue running](assets/preview.png)
 
@@ -32,17 +35,134 @@ Other tasks:
 | `rake compile` | Rebuilds just the native extension |
 | `rake clean` | Removes build artifacts |
 
-The window opens without an OS title bar. Drag the header bar to move it.
-The three glyphs in the top-right corner restore the title bar, toggle
-fullscreen, and quit. The same controls live on the **Settings** page.
+### Which monitor
+
+On macOS the window opens centered on your external monitor. If no external
+monitor is connected it refuses to start rather than cover the main screen.
+To choose a different spot, set an environment variable:
+
+| Variable | Effect |
+| --- | --- |
+| `BOT_OPS_DISPLAY=external` | First non-main monitor (default); exits if there is none |
+| `BOT_OPS_DISPLAY=main` | Leave placement to the OS (main monitor) |
+| `BOT_OPS_DISPLAY=2` | Monitor number 2, in macOS's screen order |
+| `BOT_OPS_POSITION=x,y` | Exact top-left corner in screen points (any OS) |
+
+```sh
+BOT_OPS_DISPLAY=main bundle exec rake run
+```
+
+`BOT_OPS_FULLSCREEN=1` starts fullscreen on that monitor (macOS's own
+fullscreen, in its own Space).
+
+The window opens without an OS title bar. Drag the header bar to move it,
+and the grip in the bottom-right corner to resize it (down to 768x512); the
+panels zoom and stretch to fill whatever size it is.
+The three buttons at the right of the header minimize (leaving fullscreen
+first if needed), enter or leave fullscreen, and quit. The **Settings** page
+has the same controls plus a title-bar toggle.
+Click a tool call, prompt, event-log line, machine, or a live session's
+last tool for the full detail in a box over the dashboard. Text is shown
+exactly as written, never wrapped (code's indentation means something), so
+drag inside the box or swipe sideways to read long lines; it also scrolls
+up and down, and Esc, its X or a click outside closes it. Full text (a tool's whole input, a
+prompt, an error) is kept for this machine's sessions only; other machines
+and cloud sessions send short excerpts.
+
+In fullscreen macOS slides its menu bar over the top edge, so use the keys:
+**Esc** leaves fullscreen, **F11** or **Ctrl+Cmd+F** toggles it.
+
+The layout stretches to the window: the content is zoomed until the
+1536x1024 design fits, and the panels widen or grow taller to use the rest,
+so a 16:9 monitor is filled edge to edge without black bars.
+
+## Where the data comes from
+
+`BotOps::Probe` reads Claude Code's own files on the machine it runs on.
+It sends nothing anywhere and changes no settings:
+
+| Source | Gives |
+| --- | --- |
+| `~/.claude/sessions/<pid>.json` (pid checked alive) | live sessions: name, cwd, status (busy/idle), entrypoint, version |
+| transcripts without a live process | **earlier** sessions from the last 12h (e.g. VS Code conversations you have moved on from), listed below the live ones |
+| `~/.claude/projects/*/<session>.jsonl` (+ `subagents/`) | model, tokens, context size, tool calls and errors, prompts, title, git branch |
+| `sysctl`, `vm_stat`, `df` (macOS) or `/proc` (Linux) | load, memory, disk, uptime |
+
+Transcripts are tailed: the first scan reads the last 24 hours, then each
+one-second refresh reads only the lines appended since. These files are
+Claude Code internals, not a published API, so every field is read
+defensively and a format change shows up as missing data, never as wrong
+data. `claude agents --json` lists the same live sessions if you want to
+cross-check.
+
+### Hooks (optional)
+
+`bin/bot-ops-hook` is a Claude Code command hook that appends
+SessionStart, SessionEnd, Notification and Stop events to
+`~/.claude/bot-ops/hooks.jsonl`. With it registered, a session blocked on a
+permission prompt shows **Needs you** (yellow, sorted first) within a
+second or two, and starts, ends and finished turns appear in the event log. It
+prints nothing, always exits 0 and caps its log at 2 MB. Register it yourself
+for those four events (for example with `/hooks`) as
+`ruby /path/to/bot-ops-blue/bin/bot-ops-hook`; the Settings page shows
+whether events are arriving.
+
+### Adding other accounts and machines
+
+The probe only reads the account it runs as. Sessions from another macOS
+account on the same Mac (for example a VS Code window logged in as a
+different user), or from another machine, reach the dashboard through
+`bin/bot-ops-agent`, run as that account, posting to the dashboard's
+collector. Sources are keyed `user@host`, so accounts sharing a Mac show up
+separately.
+
+On the account showing the dashboard:
+
+```sh
+bundle exec rake token                       # creates ~/.config/bot-ops-blue/token (0600)
+BOT_OPS_LISTEN=127.0.0.1:47800 bundle exec rake run   # same Mac only
+BOT_OPS_LISTEN=0.0.0.0:47800 bundle exec rake run     # LAN / Tailscale
+```
+
+In each other account or machine, with a checkout of this repo and any Ruby
+2.6+ (macOS's built-in `/usr/bin/ruby` works, no gems needed), put the same
+token in `~/.config/bot-ops-blue/token` (or `BOT_OPS_TOKEN`) and run:
+
+```sh
+bin/bot-ops-agent                                         # same Mac
+BOT_OPS_COLLECTOR=http://<dashboard-host>:47800 bin/bot-ops-agent   # elsewhere
+```
+
+The agent posts a snapshot every 3 seconds (`BOT_OPS_INTERVAL`). A source
+that stops reporting turns offline after 15 seconds and its sessions leave
+the live views. Snapshots carry prompt excerpts and tool details over plain
+HTTP, guarded only by the token, so keep the port on loopback or a network
+you trust (LAN, Tailscale, or an SSH tunnel), not the open internet.
+
+### Cloud sessions (claude.ai/code)
+
+Claude Code has no API that lists cloud sessions, so they report
+themselves: the cloud environment's setup script installs a small hook on
+every session VM, which posts trimmed events (prompt excerpts, tool names;
+never file contents) through an ngrok tunnel to the collector. Cloud
+sessions then appear as the `claude.ai` source with a ☁ label.
+
+**Step-by-step guide, with screenshots: [docs/cloud-sessions.md](docs/cloud-sessions.md).**
 
 ## How it is put together
 
 ```
 bot_ops_blue.rb             entry point
+bin/bot-ops-agent           reports another machine to the dashboard
+cloud/                      cloud reporter, its setup script, hook settings, ngrok policy
+docs/                       guides (cloud sessions)
 lib/bot_ops/
   store.rb                  all dashboard state + Store#apply(event)
-  comms.rb                  Channel interface, Multiplexer, SimulatedChannel
+  probe.rb                  reads this machine's Claude Code sessions + health
+  collector.rb              HTTP endpoint for other machines' snapshots + cloud events
+  cloud_feed.rb             turns cloud hook events into the claude.ai source
+  comms.rb                  Channel interface, Multiplexer, ClaudeChannel
+  display.rb                picks the monitor the window opens on
   scene.rb                  builds a frame from the Store; handles clicks
   panels.rb, widgets.rb     drawing of each panel, on top of Canvas
   canvas.rb                 toolkit-independent display list (+ JSON, + SVG)
@@ -65,7 +185,7 @@ closes. While it runs, Rust calls two methods on `host`:
 | Call | Returns |
 | --- | --- |
 | `host.poll` | JSON frame (`cmds`, `hits`, `drag`) when something changed, else `""` |
-| `host.hit(id)` | A window command for hit region `id`: `"quit"`, `"fullscreen:on/off"`, `"decorations:on/off"`, or `""` |
+| `host.hit(id)` | A window command for hit region `id`: `"quit"`, `"fullscreen:toggle"`, `"decorations:toggle"`, or `""` |
 
 Rust handles the drag region (the header) natively, draws the frame, and
 executes the window commands. Everything else, including the two-second
@@ -105,7 +225,7 @@ end
 Then boot the hub with it in `bot_ops_blue.rb`:
 
 ```ruby
-channel = BotOps::Comms::Multiplexer.new(SocketChannel.new, BotOps::Comms::SimulatedChannel.new)
+channel = BotOps::Comms::Multiplexer.new(SocketChannel.new, BotOps::Comms::ClaudeChannel.new)
 BotOps::NativeHost.new(channel: channel).launch
 ```
 
@@ -113,21 +233,9 @@ Supported event types (see `Store#apply`):
 
 | `type` | Fields |
 | --- | --- |
-| `progress` | `bot_id`, `progress` (0-100) |
-| `activity.add` / `activity.status` | `bot_id`, `task`, `progress`, `status` |
-| `bot.status` | `bot_id`, `status`, `tasks` |
-| `task.add` / `task.status` | `id`, `title`, `agent`, `priority`, `status` |
-| `workflow` | `id`, `done`, `status` |
-| `log` | `level` (INFO/WARN/ERROR), `message` |
-| `event` | `bot_id`, `message` |
-| `health` | `cpu`, `memory`, `network`, `storage`, `response_ms`, `error_rate` |
-| `pipeline` | `input`, `processing`, `review`, `output` |
-| `series.push` | `label`, `values` (`created`, `processing`, `completed`, `failed`) |
-| `stat` | `label`, `value`, `delta`, `delta_dir`, `delta_color` |
-| `agent.detail` | `bot_id`, `task`, `progress`, `started_at`, `model`, `capabilities` |
-| `system` | `online` |
-| `fleet.total` | `total` |
-| `tick` | `seconds` |
+| `snapshot` | `snapshot` (a `Probe#snapshot` hash), `local` (true for this machine) |
+| `collector` | `status` (text shown in the header and on Settings) |
+| `probe.error` | `message` |
 
 ## Platform notes
 

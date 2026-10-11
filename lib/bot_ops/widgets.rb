@@ -42,7 +42,7 @@ module BotOps
       @c.rect(x, y, w, h,
               curve: opts[:curve] || 6,
               fill: opts[:fill] || col(PANEL2),
-              stroke: opts[:stroke] || col(CYAN, 0.18),
+              stroke: opts[:stroke] || col(EDGE_SOFT, 0.8),
               strokewidth: opts[:strokewidth] || 1)
     end
 
@@ -67,17 +67,62 @@ module BotOps
     # A framed dashboard panel. The block draws the body with its origin at
     # the panel's top-left corner just below the title bar.
     def panel(x, y, w, h, opts = {})
-      @c.rect(x, y, w, h, curve: 7, fill: col(PANEL), stroke: col(CYAN, 0.3))
-      @c.line(x + 14, y + 1, x + w - 14, y + 1, stroke: col(CYAN, 0.35))
+      @c.rect(x, y, w, h, curve: 7, fill: col(PANEL))
+      electric_frame(x, y, w, h, curve: 7)
       if opts[:title]
         txt(opts[:title], x + 16, y + 11, size: 11, color: TEXT, weight: :bold, kerning: 1)
-        hline(x + 1, x + w - 1, y + Layout::PANEL_TITLE_H - 1, col(CYAN, 0.1))
+        fade_line(x + 10, x + w - 10, y + Layout::PANEL_TITLE_H - 1, BOLT)
       end
       if opts[:right]
         rw = opts[:right_w] || 120
         txt(opts[:right], x + w - 16 - rw, y + 11, size: 10, color: opts[:right_color] || CYAN, width: rw, align: :right)
       end
       @c.group(x, y + Layout::PANEL_TITLE_H) { yield } if block_given?
+    end
+
+    # Lightning-style outline: a wide faint halo, a brighter glow, a bright
+    # electric core with a white-hot hairline, glowing corner brackets, and a
+    # jagged spark on the top and bottom edges. The sparks are seeded by
+    # position, so each frame has its own bolt and it never flickers.
+    def electric_frame(x, y, w, h, curve: 7)
+      @c.rect(x - 2, y - 2, w + 4, h + 4, curve: curve + 2, stroke: col(EDGE, 0.16), strokewidth: 7)
+      @c.rect(x - 0.5, y - 0.5, w + 1, h + 1, curve: curve + 0.5, stroke: col(BOLT, 0.35), strokewidth: 3)
+      @c.rect(x, y, w, h, curve: curve, stroke: col(BOLT), strokewidth: 1.4)
+      @c.rect(x, y, w, h, curve: curve, stroke: col(SPARK, 0.45), strokewidth: 0.5)
+
+      arm = [[w, h].min / 6, 22].min
+      [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + h, 1, -1], [x + w, y + h, -1, -1]].each do |cx, cy, sx, sy|
+        [[[cx + sx * curve, cy], [cx + sx * (curve + arm), cy]],
+         [[cx, cy + sy * curve], [cx, cy + sy * (curve + arm)]]].each do |(x1, y1), (x2, y2)|
+          @c.line(x1, y1, x2, y2, stroke: col(CYAN, 0.35), strokewidth: 4)
+          @c.line(x1, y1, x2, y2, stroke: col(SPARK, 0.95), strokewidth: 1.4)
+        end
+      end
+
+      rng = Random.new((x * 73 + y * 31 + w).to_i)
+      spark(x + w * (0.55 + rng.rand * 0.15), y, [w * 0.18, 140].min, rng)
+      spark(x + w * (0.08 + rng.rand * 0.15), y + h, [w * 0.12, 90].min, rng)
+    end
+
+    # A jagged bolt along a horizontal edge: glow first, then the hot core.
+    def spark(x, y, len, rng)
+      n = 9
+      pts = (0..n).map { |i| [x + len * i / n, y + (i.zero? || i == n ? 0 : (rng.rand * 5 - 2.5))] }
+      [[col(BOLT, 0.3), 4], [col(CYAN, 0.8), 1.6], [col(SPARK), 0.7]].each do |c, sw|
+        pts.each_cons(2) { |(x1, y1), (x2, y2)| @c.line(x1, y1, x2, y2, stroke: c, strokewidth: sw) }
+      end
+      @c.circle(pts.last[0], pts.last[1], 2.2, fill: col(SPARK, 0.9))
+      @c.circle(pts.last[0], pts.last[1], 5, fill: col(CYAN, 0.18))
+    end
+
+    # A divider that is brightest on the left and fades out to the right.
+    def fade_line(x1, x2, y, color_hex)
+      steps = 8
+      seg = (x2 - x1) / steps.to_f
+      steps.times do |i|
+        a = 0.55 * (1 - i / steps.to_f)**1.6
+        @c.line(x1 + seg * i, y, x1 + seg * (i + 1), y, stroke: col(color_hex, a), strokewidth: 1)
+      end
     end
 
     # ---- indicators ----------------------------------------------------
@@ -114,14 +159,57 @@ module BotOps
       label(opts[:label], cx - r - 10, cy + r + 6, size: 10, color: TEXT, width: r * 2 + 20, align: :center) if opts[:label]
     end
 
+    # glyph is a character, or :cloud for the drawn cloud icon.
     def avatar(x, y, color_hex, glyph, d = 30)
-      @c.circle(x + d / 2.0, y + d / 2.0, d / 2.0, fill: col(color_hex, 0.14), stroke: col(color_hex, 0.9))
-      txt(glyph, x, y + d / 2 - 8, size: 12, color: color_hex, width: d, align: :center)
+      @c.circle(x + d / 2.0, y + d / 2.0, d / 2.0, fill: col(color_hex, 0.18), stroke: col(color_hex, 0.95))
+      icon_glyph(glyph, x, y, d, color_hex)
     end
 
     def square_icon(x, y, color_hex, glyph, d = 28)
-      @c.rect(x, y, d, d, curve: 6, fill: col(color_hex, 0.14), stroke: col(color_hex, 0.9))
-      txt(glyph, x, y + d / 2 - 8, size: 12, color: color_hex, width: d, align: :center)
+      @c.rect(x, y, d, d, curve: 6, fill: col(color_hex, 0.18), stroke: col(color_hex, 0.95))
+      icon_glyph(glyph, x, y, d, color_hex)
+    end
+
+    def icon_glyph(glyph, x, y, d, color_hex)
+      if glyph == :cloud
+        cloud_icon(x + d / 2.0, y + d / 2.0, d * 0.64, col(color_hex), strokewidth: [d / 18.0, 1.4].max)
+      else
+        txt(glyph, x, y + d / 2 - 8, size: 12, color: color_hex, width: d, align: :center)
+      end
+    end
+
+    # The outline of a cloud, three round lobes over a flat rounded base,
+    # as points in a unit box (width 1, centred on 0.5, 0.5). Traced once by
+    # bisecting rays from the middle against the shapes' signed distances.
+    CLOUD_OUTLINE = begin
+      circle = ->(px, py, cx, cy, r) { Math.hypot(px - cx, py - cy) - r }
+      # rounded box centred (0.51, 0.565), half size 0.35 x 0.105, corners 0.10
+      base = lambda do |px, py|
+        qx = (px - 0.51).abs - (0.35 - 0.10)
+        qy = (py - 0.565).abs - (0.105 - 0.10)
+        Math.hypot([qx, 0].max, [qy, 0].max) + [[qx, qy].max, 0].min - 0.10
+      end
+      sdf = lambda do |px, py|
+        [circle.(px, py, 0.31, 0.50, 0.15), circle.(px, py, 0.50, 0.40, 0.20),
+         circle.(px, py, 0.715, 0.48, 0.16), base.(px, py)].min
+      end
+      ox, oy = 0.51, 0.52
+      pts = (0...120).map do |i|
+        a = 2 * Math::PI * i / 120
+        lo, hi = 0.0, 0.7
+        40.times { mid = (lo + hi) / 2; sdf.(ox + mid * Math.cos(a), oy + mid * Math.sin(a)) <= 0 ? lo = mid : hi = mid }
+        [ox + lo * Math.cos(a), oy + lo * Math.sin(a)]
+      end
+      xs, ys = pts.map(&:first), pts.map(&:last)
+      w = xs.max - xs.min
+      mx, my = (xs.max + xs.min) / 2, (ys.max + ys.min) / 2
+      pts.map { |x, y| [0.5 + (x - mx) / w, 0.5 + (y - my) / w] }.freeze
+    end
+
+    # A hollow cloud, w wide, centred on (cx, cy).
+    def cloud_icon(cx, cy, w, color, strokewidth: 1.6)
+      pts = CLOUD_OUTLINE.map { |x, y| [cx + (x - 0.5) * w, cy + (y - 0.5) * w] }
+      @c.polyline(pts, stroke: color, strokewidth: strokewidth, closed: true)
     end
 
     # Pill-shaped tab; returns its width. The block runs when it is clicked.
@@ -130,7 +218,7 @@ module BotOps
       c = opts[:color] || CYAN
       @c.rect(x, y, w, 20, curve: 10,
               fill: active ? col(c, 0.18) : col(PANEL2),
-              stroke: active ? col(c, 0.9) : col(CYAN, 0.18))
+              stroke: active ? col(c, 0.9) : col(EDGE_SOFT, 0.8))
       txt(text, x, y + 3, size: 9, color: active ? c : MUTED, width: w, align: :center)
       @c.hit(x, y, w, 20, &on_click) if on_click
       w

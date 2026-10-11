@@ -10,6 +10,8 @@ module BotOps
   # SVG exporter below for tests and previews) then replays the commands.
   class Canvas
     Cmd = Struct.new(:op, :a)
+    # Images are referred to by name; the native host embeds the same files.
+    IMAGE_DIR = File.expand_path("../../ext/bot_ops_native/assets", __dir__)
     Hit = Struct.new(:x, :y, :w, :h, :handler)
 
     attr_reader :cmds, :hits, :width, :height
@@ -58,6 +60,26 @@ module BotOps
       @cmds << Cmd.new(:area, [pts, @oy + base_y, fill])
     end
 
+    # Stroked line through points; closed: true joins the last to the first.
+    def polyline(points, stroke:, strokewidth: 1, closed: false)
+      pts = points.map { |(x, y)| [(@ox + x).round(2), (@oy + y).round(2)] }
+      @cmds << Cmd.new(:polyline, [pts, stroke, strokewidth, closed])
+    end
+
+    # Draws the block's commands clipped to x, y, w, h: nothing in it shows
+    # outside that rectangle. Clips nest (each is cut to its parent's).
+    def clip(x, y, w, h)
+      @cmds << Cmd.new(:clip, [@ox + x, @oy + y, w, h])
+      yield
+    ensure
+      @cmds << Cmd.new(:unclip, [])
+    end
+
+    # Named image (ext/bot_ops_native/assets/<name>.png) clipped to a circle.
+    def image_circle(name, cx, cy, r)
+      @cmds << Cmd.new(:image, [name.to_s, @ox + cx, @oy + cy, r])
+    end
+
     def text(str, x, y, size:, color:, weight: :normal, family: :sans, width: nil, align: :left, kerning: 0)
       @cmds << Cmd.new(:text, [str.to_s, @ox + x, @oy + y, size, color, weight, family, width, align, kerning])
     end
@@ -87,27 +109,38 @@ module BotOps
 
     # ---- frame export for the native host ----------------------------------
 
-    OPS = { rect: "r", circle: "c", line: "l", wedge: "w", area: "a", text: "t" }.freeze
+    OPS = { rect: "r", circle: "c", line: "l", wedge: "w", area: "a", text: "t", image: "i", polyline: "p", clip: "k", unclip: "K" }.freeze
 
     # Compact JSON understood by ext/bot_ops_native (see src/lib.rs).
-    def to_frame(drag: nil)
+    # drag: the region that moves the window; resize: the grip that resizes
+    # it; pan: where a drag pans the content (an open overlay's body).
+    def to_frame(drag: nil, resize: nil, pan: nil)
       {
         "cmds" => @cmds.map { |c| [OPS[c.op]] + encode_args(c) },
         "hits" => @hits.each_with_index.map { |h, i| [h.x, h.y, h.w, h.h, i] },
-        "drag" => drag
+        "drag" => drag,
+        "resize" => resize,
+        "pan" => pan
       }
     end
 
-    def to_json(drag: nil)
-      JSON.generate(to_frame(drag: drag))
+    def to_json(drag: nil, resize: nil, pan: nil)
+      JSON.generate(to_frame(drag: drag, resize: resize, pan: pan))
     end
 
     # ---- SVG export (tests, previews) -------------------------------------
 
     def to_svg
       out = +%(<svg xmlns="http://www.w3.org/2000/svg" width="#{@width}" height="#{@height}" font-family="DejaVu Sans, sans-serif">)
+      clips = 0
       @cmds.each do |c|
         case c.op
+        when :clip
+          x, y, w, h = c.a
+          clips += 1
+          out << %(<clipPath id="cut#{clips}"><rect x="#{x}" y="#{y}" width="#{w}" height="#{h}"/></clipPath><g clip-path="url(#cut#{clips})">)
+        when :unclip
+          out << "</g>"
         when :rect
           x, y, w, h, f, s, r, sw = c.a
           out << %(<rect x="#{x}" y="#{y}" width="#{w}" height="#{h}" rx="#{r}" fill="#{svg_c(f)}" stroke="#{svg_c(s)}" stroke-width="#{sw}"/>)
@@ -127,6 +160,18 @@ module BotOps
           pts, base, f = c.a
           poly = [[pts.first[0], base]] + pts + [[pts.last[0], base]]
           out << %(<polygon points="#{poly.map { |p| p.join(',') }.join(' ')}" fill="#{svg_c(f)}"/>)
+        when :polyline
+          pts, s, sw, closed = c.a
+          tag = closed ? "polygon" : "polyline"
+          out << %(<#{tag} points="#{pts.map { |p| p.join(',') }.join(' ')}" fill="none" stroke="#{svg_c(s)}" stroke-width="#{sw}" stroke-linejoin="round"/>)
+        when :image
+          name, cx, cy, r = c.a
+          path = File.join(IMAGE_DIR, "#{name}.png")
+          next unless File.exist?(path)
+          id = "clip-#{name}-#{cx.round}-#{cy.round}"
+          out << %(<clipPath id="#{id}"><circle cx="#{cx}" cy="#{cy}" r="#{r}"/></clipPath>)
+          out << %(<image x="#{cx - r}" y="#{cy - r}" width="#{r * 2}" height="#{r * 2}" clip-path="url(##{id})" ) +
+                 %(href="data:image/png;base64,#{[File.binread(path)].pack("m0")}"/>)
         when :text
           str, x, y, size, color, weight, family, width, align, kerning = c.a
           anchor = { left: "start", center: "middle", right: "end" }[align]

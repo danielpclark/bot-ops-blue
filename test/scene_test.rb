@@ -1,13 +1,13 @@
 # frozen_string_literal: true
 
-require "minitest/autorun"
-require "bot_ops"
+require "test_helper"
+require "open3"
+require "tmpdir"
 
 class SceneTest < Minitest::Test
   def setup
-    @store = BotOps::Store.new
+    @store = Fixtures.store
     @host = BotOps::PreviewHost.new
-    @channel = BotOps::Comms::SimulatedChannel.new
     @scene = BotOps::Scene.new(@store, @host)
   end
 
@@ -15,44 +15,57 @@ class SceneTest < Minitest::Test
     @scene.build
   end
 
-  def click_text(canvas, text)
-    cmd = canvas.cmds.find { |c| c.op == :text && c.a[0] == text && canvas.hit_at(c.a[1] + 2, c.a[2] + 2) }
+  # Clicks the first clickable +text+; tab: true only matches pill tabs (20pt high).
+  def click_text(canvas, text, tab: false)
+    cmd = canvas.cmds.find do |c|
+      next false unless c.op == :text && c.a[0] == text
+      h = canvas.hit_at(c.a[1] + 2, c.a[2] + 2)
+      h && (!tab || h.h == 20)
+    end
     refute_nil cmd, "no clickable text #{text.inspect}"
     assert @scene.click(cmd.a[1] + 2, cmd.a[2] + 2)
   end
 
-  def test_overview_draws_every_panel
+  def test_overview_draws_every_panel_from_real_data
     c = canvas
-    %w[BOT\ FLEET LIVE\ BOT\ ACTIVITY WORKFLOWS TASK\ QUEUE CURRENT\ PIPELINE SYSTEM\ HEALTH
-       RECENT\ ACTIVITY AGENT\ DETAILS RECENT\ LOGS RECENT\ REPORTS BOT\ OPS\ BLUE].each do |title|
+    ["CLAUDE SESSIONS", "LIVE ACTIVITY", "PROJECTS · 24H", "TOOL CALLS", "USAGE", "SYSTEM HEALTH · laptop",
+     "RECENT PROMPTS", "SESSION DETAILS", "EVENT LOG", "MACHINES", "BOT OPS BLUE"].each do |title|
       assert_includes c.texts, title
     end
-    assert_operator c.count(:text), :>, 300
-    assert_operator c.count(:rect), :>, 100
+    assert_includes c.texts, "Fix flaky login test", "sessions are named by what they are working on"
+    assert_includes c.texts, "api · CLI · api-fix"
+    assert_includes c.texts, "Opus 5.5"
+    assert_includes c.texts, "1 MACHINE ONLINE"
     assert_equal 4, c.count(:wedge), "four health gauges"
   end
 
-  def test_refresh_loop_applies_simulated_events
-    40.times { @store.apply_all(@channel.poll(@store)) }
+  def test_header_logo_is_the_bot_portrait_in_a_round_frame
     c = canvas
-    assert_operator @store.logs.size, :>, 8
-    assert_includes c.texts, "BOT OPS BLUE"
+    logo = c.cmds.find { |cmd| cmd.op == :image }
+    assert_equal ["logo", 60, 43, 28], logo.a
+    assert_includes JSON.parse(c.to_json)["cmds"], ["i", "logo", 60, 43, 28]
+    assert_includes c.to_svg, "data:image/png;base64,", "previews embed the same image"
+    assert File.exist?(File.join(BotOps::Canvas::IMAGE_DIR, "logo.png"))
   end
 
-  def test_tabs_filters_and_bot_selection
-    c = canvas
-    click_text(c, "Completed")
-    assert_equal :completed, @store.activity_tab
-    c = canvas
-    assert_includes c.texts, "✓ Completed"
+  def test_empty_store_shows_empty_states_not_filler
+    c = BotOps::Scene.new(BotOps::Store.new, @host).build
+    assert_includes c.texts, "Reading Claude Code sessions…"
+    assert_includes c.texts, "WAITING FOR DATA"
+  end
 
-    click_text(c, "Pending (12)")
-    assert_equal :pending, @store.queue_filter
-    assert @store.visible_tasks.all? { |t| t.status == "Pending" }
+  def test_tabs_filters_and_session_selection
+    click_text(canvas, "Idle", tab: true)
+    assert_equal :idle, @store.activity_tab
+    assert_equal ["s-idle"], @store.visible_sessions.map { |s| s["id"] }
 
-    click_text(c, "Research Agent")
-    assert_equal :research, @store.selected_bot_id
-    assert_includes canvas.texts, "Analyzing market trends"
+    click_text(canvas, "Errors (1)", tab: true)
+    assert_equal :errors, @store.tool_filter
+    assert_equal ["error"], @store.visible_tools.map { |e| e["kind"] }
+
+    click_text(canvas, "docs")
+    assert_equal "s-idle", @store.selected_session_id
+    assert_includes canvas.texts, "Sonnet 5.5"
   end
 
   def test_every_page_builds_and_navigates
@@ -65,57 +78,122 @@ class SceneTest < Minitest::Test
     end
   end
 
-  def test_header_window_controls
-    c = canvas
-    click_text(c, "▣")
-    click_text(c, "⤢")
-    click_text(c, "✕")
-    assert_equal [:toggle_decorations, :toggle_fullscreen, :quit], @host.actions
+  def test_header_window_controls_minimize_toggle_fullscreen_and_quit
+    canvas
+    @scene.window_controls.each { |_, x, y, s| assert @scene.click(x + s / 2, y + s / 2) }
+    assert_equal [:minimize, :toggle_fullscreen, :quit], @host.actions
+  end
+
+  # Tiny controls in the top right corner, windowed or fullscreen.
+  def test_window_controls_sit_in_the_top_right_corner
+    [false, true].each do |fs|
+      @host.fullscreen = fs
+      @scene.window_controls.each { |_, _, y, s| assert_operator y + s, :<=, 20 }
+    end
+    @scene.resize(1820, 1024)
+    assert_equal 1820 - 1536 + 1506, @scene.window_controls.last[1]
+  end
+
+  def test_fullscreen_control_shows_what_a_click_will_do
+    lines = -> { canvas.cmds.count { |c| c.op == :line } }
+    out = lines.call
+    @host.fullscreen = true
+    assert_equal out - 3, lines.call, "same strokes, minus the resize grip's three (none in fullscreen)"
+    refute_equal canvas.to_svg, (@host.fullscreen = false; canvas.to_svg), "but drawn differently"
+  end
+
+  def test_resize_grip_sits_in_the_bottom_right_corner_and_reaches_the_native_side
+    @scene.resize(1820, 1024)
+    assert_equal [1820 - 16, 1024 - 16, 16, 16], @scene.resize_grip
+    @host.fullscreen = true
+    assert_nil @scene.resize_grip, "no grip in fullscreen"
+    host = BotOps::NativeHost.new(channel: BotOps::Comms::Channel.new)
+    assert_equal [1536 - 16, 1024 - 16, 16, 16], JSON.parse(host.poll)["resize"]
   end
 
   def test_header_drag_region_excludes_controls
     canvas
+    _, x, y, s = @scene.window_controls.last
     assert @scene.drag_region?(300, 30)
-    refute @scene.drag_region?(1505, 12), "quit glyph is a button, not a drag handle"
+    refute @scene.drag_region?(x + s / 2, y + s / 2), "the quit control is a button, not a drag handle"
     refute @scene.drag_region?(300, 300)
-  end
-
-  def test_store_applies_external_events
-    @store.apply(type: "log", level: "ERROR", message: "boom")
-    @store.apply("type" => "health", "cpu" => 91)
-    @store.apply(type: "progress", bot_id: :content, progress: 100)
-    assert_equal "boom", @store.logs.first.message
-    assert_equal 91, @store.health[:cpu]
-    assert_equal "Completed", @store.activity.find { |a| a.bot_id == :content }.status
   end
 end
 
 class FrameTest < Minitest::Test
   def test_frame_json_round_trips_commands_and_hits
-    store = BotOps::Store.new
-    host = BotOps::PreviewHost.new
-    canvas = BotOps::Scene.new(store, host).build
+    canvas = BotOps::Scene.new(Fixtures.store, BotOps::PreviewHost.new).build
     frame = JSON.parse(canvas.to_json(drag: [0, 0, 1536, 86]))
     assert_equal [0, 0, 1536, 86], frame["drag"]
     assert_equal canvas.count, frame["cmds"].size
     assert_equal canvas.hits.size, frame["hits"].size
-    ops = frame["cmds"].map(&:first).uniq.sort
-    assert_equal %w[a c l r t w], ops
     t = frame["cmds"].find { |c| c[0] == "t" && c[1] == "BOT OPS BLUE" }
     assert_equal ["bold", "sans", nil, "left", 3], t[6..10]
   end
 
-  def test_native_host_polls_and_dispatches_hits
-    host = BotOps::NativeHost.new(channel: BotOps::Comms::SimulatedChannel.new)
+  def test_native_host_polls_resizes_and_dispatches_hits
+    channel = BotOps::Comms::Channel.new
+    channel.push(type: "snapshot", snapshot: Fixtures.snapshot, local: true)
+    host = BotOps::NativeHost.new(channel: channel)
     frame = JSON.parse(host.poll)
     assert_equal "", host.poll, "nothing changed, so no new frame"
-    quit_hit = frame["hits"].find { |h| h[1] < 30 && h[0] > 1495 } # top-right "x" glyph
+    quit_hit = frame["hits"].find { |h| h[0] == 1501 && h[1] == 4 } # top-right quit control
     assert_equal "quit", host.hit(quit_hit[4])
-    page_hit = frame["hits"].find { |h| h[0] < 90 && h[1] > 150 && h[1] < 220 } # sidebar "Bots"
+    page_hit = frame["hits"].find { |h| h[0] < 90 && h[1] > 150 && h[1] < 220 } # sidebar "Sessions"
     assert_equal "", host.hit(page_hit[4])
-    assert_equal :bots, host.store.page
+    assert_equal :sessions, host.store.page
     refute_equal "", host.poll, "page change produces a new frame"
+    host.resize(1820, 1024)
+    assert_equal 1820, JSON.parse(host.poll)["drag"][2], "resize lays out at the new width"
     host.toggle_fullscreen
-    assert_equal "fullscreen:on", host.hit(-1)
+    assert_equal "fullscreen:toggle", host.hit(-1)
+    host.minimize
+    assert_equal "minimize", host.hit(-1)
+    refute host.fullscreen?
+    host.fullscreen_changed(1)
+    assert host.fullscreen?
+    refute_equal "", host.poll, "a fullscreen change redraws the header"
+  end
+
+  def test_native_host_applies_new_data_on_the_next_frame
+    channel = BotOps::Comms::Channel.new
+    host = BotOps::NativeHost.new(channel: channel)
+    host.poll
+    assert_equal "", host.poll
+    channel.push(type: "snapshot", snapshot: Fixtures.snapshot, local: true)
+    refute_equal "", host.poll, "a snapshot is drawn right away, not on the next 2s tick"
+    assert_equal 2, host.store.sessions.size
+  end
+end
+
+class NativeHostSignalTest < Minitest::Test
+  # A Ctrl+C or TERM delivered while Ruby runs a callback must close the
+  # window, not be swallowed as a failed frame.
+  def test_an_interrupt_during_a_callback_becomes_quit
+    host = BotOps::NativeHost.new(channel: BotOps::Comms::Channel.new)
+    host.poll
+    host.store.define_singleton_method(:apply_all) { |_| raise Interrupt }
+    host.instance_variable_get(:@channel).push(type: "collector", status: "x")
+    assert_equal "quit", host.poll
+    assert_equal "quit", host.poll, "and stays quit"
+    assert_equal "quit", host.hit(0)
+  end
+end
+
+class SingleInstanceTest < Minitest::Test
+  def test_a_second_dashboard_cannot_take_the_lock
+    Dir.mktmpdir do |dir|
+      path = File.join(dir, "dashboard.lock")
+      first = BotOps::NativeHost.single_instance_lock(path)
+      refute_nil first
+      assert_equal Process.pid.to_s, File.read(path).strip
+      out, status = Open3.capture2e(RbConfig.ruby, "-I", File.expand_path("../lib", __dir__), "-e",
+                                    "require 'bot_ops'; exit(BotOps::NativeHost.single_instance_lock(ARGV[0]) ? 0 : 3)", path)
+      assert_equal 3, status.exitstatus, "a second process is refused while the first holds the lock (#{out})"
+      first.close
+      _, status = Open3.capture2e(RbConfig.ruby, "-I", File.expand_path("../lib", __dir__), "-e",
+                                  "require 'bot_ops'; exit(BotOps::NativeHost.single_instance_lock(ARGV[0]) ? 0 : 3)", path)
+      assert_equal 0, status.exitstatus, "and allowed once it's gone"
+    end
   end
 end
