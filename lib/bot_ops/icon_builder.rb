@@ -30,14 +30,16 @@ module BotOps
     }.freeze
 
     # The cloud, traced from the designer's drawing (a 1088x656 tracing of
-    # it): three lobes on top, wide rounded corners below, and a bottom of
-    # three shallow arcs that meet in small notches. The outline is where
-    # the union of these shapes ends; it's star-shaped around CLOUD_ORIGIN.
+    # it): three lobes on top, wide rounded corners below, and a bottom that
+    # is one long, barely curved line. The outline is where the union of
+    # these shapes ends, smoothed (CLOUD_SMOOTHING passes) so the dips
+    # between lobes are soft; it's star-shaped around CLOUD_ORIGIN.
     CLOUD_CIRCLES  = [[560, 238, 118], [386, 288, 67], [722, 285, 68]].freeze
     CLOUD_ELLIPSES = [[302, 390, 77, 90], [790, 390, 85, 91]].freeze
-    CLOUD_ARCS     = [[302, 184, 296, 302, 412], [532, 227, 256, 405, 660], [790, 78, 403, 653, 790]].freeze # circle, x range
+    CLOUD_ARCS     = [[546, 487 - 4256, 4256, 302, 790]].freeze # circle, x range: a gentle sag between the corners
     CLOUD_BODY     = [300, 300, 800, 420].freeze
     CLOUD_ORIGIN   = [550, 370].freeze
+    CLOUD_SMOOTHING = 24
 
     module_function
 
@@ -63,7 +65,14 @@ module BotOps
         30.times { mid = (lo + hi) / 2; cloud_sdf(ox + mid * dx, oy + mid * dy) <= 0 ? lo = mid : hi = mid }
         [ox + lo * dx, oy + lo * dy]
       end
-      raw = resample(chaikin(raw, 2), 120)
+      raw = resample(chaikin(raw, 2), 240)
+      CLOUD_SMOOTHING.times do
+        raw = raw.each_index.map do |i|
+          a, b, c = raw[i - 1], raw[i], raw[(i + 1) % raw.size]
+          [(a[0] + 2 * b[0] + c[0]) / 4.0, (a[1] + 2 * b[1] + c[1]) / 4.0]
+        end
+      end
+      raw = resample(raw, 120)
       xs, ys = raw.map(&:first), raw.map(&:last)
       k = 20.0 / (xs.max - xs.min)
       mx, my = (xs.max + xs.min) / 2, (ys.max + ys.min) / 2
