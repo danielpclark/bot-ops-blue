@@ -168,7 +168,7 @@ module BotOps
     def glow_dot(x, y, color, d = 6)
       cx = x + d / 2.0
       cy = y + d / 2.0
-      [[d / 2.0 + 4.5, 0.08], [d / 2.0 + 3, 0.14], [d / 2.0 + 1.5, 0.24]].each do |r, a|
+      [[d / 2.0 + 2.5, 0.07], [d / 2.0 + 1.2, 0.14]].each do |r, a|
         @c.circle(cx, cy, r, fill: [color[0], color[1], color[2], a])
       end
       dot(x, y, color, d)
@@ -241,8 +241,8 @@ module BotOps
       (0..n).map { |i| a = (start_deg + sweep_deg * i / n.to_f) * Math::PI / 180; [cx + r * Math.cos(a), cy + r * Math.sin(a)] }
     end
 
-    # Ring gauge: a dark track, a glowing arc from 12 o'clock with round
-    # ends, the percentage in the middle and a label beneath.
+    # Ring gauge: a dark track, an arc from 12 o'clock with round ends, the
+    # percentage in the middle and a label beneath.
     def donut(cx, cy, r, pct, color_hex, opts = {})
       thickness = opts[:thickness] || 9
       pct = [[pct.to_f, 0].max, 100].min
@@ -250,11 +250,8 @@ module BotOps
       @c.circle(cx, cy, rr, stroke: col(TRACK), strokewidth: thickness)
       if pct > 0.5
         pts = arc_points(cx, cy, rr, -90, 360.0 * pct / 100.0)
-        @c.polyline(pts, stroke: col(color_hex, 0.22), strokewidth: thickness + 8, round: true)
+        @c.polyline(pts, stroke: col(color_hex, 0.08), strokewidth: thickness + 4, round: true)
         @c.polyline(pts, stroke: col(color_hex), strokewidth: thickness, round: true)
-        # A lighter leading edge, like light running along the ring.
-        tail = pts.last([pts.size / 3, 2].max)
-        @c.polyline(tail, stroke: col(tint(color_hex, 0.35), 0.6), strokewidth: thickness * 0.35, round: true)
       end
       txt("#{pct.round}%", cx - r, cy - 10, size: 16, color: TEXT, weight: :bold, width: r * 2, align: :center)
       return unless opts[:label]
@@ -295,7 +292,7 @@ module BotOps
       cx = x + d / 2.0
       cy = y + d / 2.0
       base = dim ? mix(color_hex, SLATE, 0.6) : color_hex
-      @c.glow(x, y, d, d, curve: d / 2.0, blur: d * 0.35, color: col(base, dim ? 0.15 : 0.35))
+      @c.glow(x, y, d, d, curve: d / 2.0, blur: d * 0.18, color: col(base, dim ? 0.05 : 0.12))
       grad_circle(cx, cy, d / 2.0, col(tint(base, 0.18)), col(shade(base, 0.38)))
       @c.circle(cx, cy, d / 2.0 - 0.5, stroke: col(tint(base, 0.45), 0.45), strokewidth: 1)
       icon_glyph(glyph, x, y, d, col("#FFFFFF", dim ? 0.7 : 0.97))
@@ -375,7 +372,7 @@ module BotOps
         dense = pts.size > 16
         pts.each do |px, py|
           next if py >= gy + gh - 0.5 # points on the floor would only add noise
-          @c.circle(px, py, dense ? 3.5 : 5, fill: col(s[:color], 0.18))
+          @c.circle(px, py, dense ? 3 : 4, fill: col(s[:color], 0.12))
           @c.circle(px, py, dense ? 2 : 2.8, fill: col(tint(s[:color], 0.3)))
         end
       end

@@ -60,7 +60,7 @@ module BotOps
       fade_line(0, w, hh - 1, BOLT, alpha: 0.4, width: 1, peak: 0.6)
 
       # logo: the bot portrait in a round, glowing frame like a profile photo
-      @c.glow(29, 12, 62, 62, curve: 31, blur: 16, color: col(CYAN, 0.45))
+      @c.glow(29, 12, 62, 62, curve: 31, blur: 10, color: col(CYAN, 0.18))
       @c.image_circle("logo", 60, 43, 29)
       @c.circle(60, 43, 30, stroke: col(CYAN), strokewidth: 2.5)
 
