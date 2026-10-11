@@ -12,6 +12,7 @@ module BotOps
     PANEL   = "#081429"   # panel fill, bottom of its gradient
     PANEL_TOP = "#0C1D3C" # panel fill, top of its gradient
     PANEL2  = "#0C1B36"   # cards inside a panel
+    OVERLAY_BG = "#07131F" # the details box: dark, so its text stands out
     CARD_TOP = "#10244A"
     TRACK   = "#132A52"   # gauge and bar tracks
     LINE    = "#16305E"

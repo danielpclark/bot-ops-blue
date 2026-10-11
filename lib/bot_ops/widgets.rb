@@ -138,11 +138,6 @@ module BotOps
       fade_vline(x + 0.5, y + curve, y + h - curve, CYAN, alpha: 0.35, peak: 0.25)
     end
 
-    # Kept for callers of the old name.
-    def electric_frame(x, y, w, h, curve: 10)
-      frame(x, y, w, h, curve: curve, fill: false)
-    end
-
     def box(x, y, w, h, opts = {})
       curve = opts[:curve] || 8
       if opts[:fill].is_a?(Array) && opts[:flat]

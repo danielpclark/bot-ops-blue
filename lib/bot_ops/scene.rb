@@ -443,8 +443,11 @@ module BotOps
       bh = [[h - 200, 780].min, 320].max
       bx = (w - bw) / 2
       by = (h - bh) / 2
-      @c.rect(bx, by, bw, bh, curve: 9, fill: col(PANEL))
-      electric_frame(bx, by, bw, bh, curve: 9)
+      # Glow first, then the box's own dark fill over it, then the outline:
+      # a glow drawn after the fill would tint the whole box blue.
+      @c.glow(bx, by, bw, bh, curve: 10, blur: 22, color: col(BORDER, 0.35))
+      @c.rect(bx, by, bw, bh, curve: 10, fill: col(OVERLAY_BG))
+      frame(bx, by, bw, bh, curve: 10, glow: 0, fill: false)
       @c.hit(bx, by, bw, bh) {}
 
       tabs_w = 0
