@@ -3,6 +3,11 @@
 module BotOps
   # Drawing helpers on top of Canvas. Mixed into Scene, which provides @c
   # (the canvas being built), @store and @host.
+  #
+  # The look: deep navy panels lit from above (a vertical gradient), a fine
+  # electric-blue outline with a soft outer glow, and highlights along the
+  # edges that are brightest in one place and fade to nothing toward the
+  # corners. Icons are Lucide line icons (ICONS) on gradient discs and tiles.
   module Widgets
     include Theme
 
@@ -13,14 +18,29 @@ module BotOps
       [r, g, b, alpha.to_f]
     end
 
+    # `hex` moved toward `other` by t (0..1), as a hex string.
+    def mix(hex, other, t)
+      a = Theme.hex_rgb(hex)
+      b = Theme.hex_rgb(other)
+      format("#%02X%02X%02X", *a.zip(b).map { |x, y| (x + (y - x) * t).round })
+    end
+
+    def tint(hex, t)
+      mix(hex, "#FFFFFF", t)
+    end
+
+    def shade(hex, t)
+      mix(hex, "#000000", t)
+    end
+
     # ---- text ----------------------------------------------------------
 
     def txt(str, x, y, opts = {})
       @c.text(str, x, y,
               size: opts[:size] || 11,
-              color: col(opts[:color] || TEXT),
+              color: col(opts[:color] || TEXT, opts[:alpha] || 1.0),
               weight: opts[:weight] ? opts[:weight].to_sym : :normal,
-              family: opts[:mono] ? :mono : :sans,
+              family: opts[:mono] ? :mono : (opts[:font] || :sans),
               width: opts[:width],
               align: (opts[:align] || :left).to_sym,
               kerning: opts[:kerning] || 0)
@@ -30,20 +50,54 @@ module BotOps
       txt(str, x, y, { size: 9, color: MUTED }.merge(opts))
     end
 
+    # Width of `str` in points as the native side lays it out.
+    def text_w(str, size, weight = :normal, font: nil, kerning: 0)
+      table = FONT_METRICS[font == :display ? :display : (font == :mono ? :mono : weight)] || FONT_METRICS[:normal]
+      str.to_s.each_char.sum { |ch| (table[ch] || 0.62) * size + kerning }
+    end
+
     # Truncate text that would otherwise run into the next column.
     def clip(str, max_chars)
       s = str.to_s
       s.length > max_chars ? "#{s[0, [max_chars - 1, 1].max]}…" : s
     end
 
-    # ---- boxes ---------------------------------------------------------
+    # Truncate to `max_w` points, ending in "…".
+    def fit_text(str, max_w, size, weight = :normal, font: nil)
+      s = str.to_s
+      return s if text_w(s, size, weight, font: font) <= max_w
+      ell = text_w("…", size, weight, font: font)
+      out = +""
+      used = 0.0
+      s.each_char do |ch|
+        cw = text_w(ch, size, weight, font: font)
+        break if used + cw + ell > max_w
+        out << ch
+        used += cw
+      end
+      "#{out.rstrip}…"
+    end
 
-    def box(x, y, w, h, opts = {})
-      @c.rect(x, y, w, h,
-              curve: opts[:curve] || 6,
-              fill: opts[:fill] || col(PANEL2),
-              stroke: opts[:stroke] || col(EDGE_SOFT, 0.8),
-              strokewidth: opts[:strokewidth] || 1)
+    # ---- lines ---------------------------------------------------------
+
+    # A horizontal line that fades in from x1, peaks at `peak` (a fraction of
+    # the way along) and fades out by x2.
+    def fade_line(x1, x2, y, hex, alpha: 0.55, width: 1, peak: 0.35)
+      xp = x1 + (x2 - x1) * peak
+      clear = col(hex, 0)
+      bright = col(hex, alpha)
+      h = width / 2.0
+      @c.gradient([[x1, y - h], [xp, y - h], [xp, y + h], [x1, y + h]], x1, y, xp, y, from: clear, to: bright) if xp > x1
+      @c.gradient([[xp, y - h], [x2, y - h], [x2, y + h], [xp, y + h]], xp, y, x2, y, from: bright, to: clear) if x2 > xp
+    end
+
+    def fade_vline(x, y1, y2, hex, alpha: 0.4, width: 1, peak: 0.5)
+      yp = y1 + (y2 - y1) * peak
+      clear = col(hex, 0)
+      bright = col(hex, alpha)
+      h = width / 2.0
+      @c.gradient([[x - h, y1], [x + h, y1], [x + h, yp], [x - h, yp]], x, y1, x, yp, from: clear, to: bright) if yp > y1
+      @c.gradient([[x - h, yp], [x + h, yp], [x + h, y2], [x - h, y2]], x, yp, x, y2, from: bright, to: clear) if y2 > yp
     end
 
     def hline(x1, x2, y, color = col(CYAN, 0.12), width = 1)
@@ -54,83 +108,120 @@ module BotOps
       @c.line(x, y1, x, y2, stroke: color, strokewidth: width)
     end
 
+    # ---- fills ---------------------------------------------------------
+
+    # A rounded rectangle filled top-to-bottom (or left-to-right) from one
+    # colour to another.
+    def grad_rect(x, y, w, h, from, to, curve: 0, across: false)
+      pts = Canvas.rounded_rect(x, y, w, h, curve)
+      if across
+        @c.gradient(pts, x, y, x + w, y, from: from, to: to)
+      else
+        @c.gradient(pts, x, y, x, y + h, from: from, to: to)
+      end
+    end
+
+    def grad_circle(cx, cy, r, from, to)
+      @c.gradient(Canvas.circle_points(cx, cy, r), cx - r * 0.7, cy - r * 0.7, cx + r * 0.7, cy + r * 0.7, from: from, to: to)
+    end
+
+    # ---- boxes ---------------------------------------------------------
+
+    # The panel look: soft glow, lit-from-above fill, fine outline, and
+    # highlights along the top and left edges.
+    def frame(x, y, w, h, curve: 10, glow: 0.26, accent: BORDER, fill: true)
+      @c.glow(x, y, w, h, curve: curve, blur: 18, color: col(accent, glow)) if glow.positive?
+      grad_rect(x, y, w, h, col(PANEL_TOP, 0.97), col(PANEL, 0.97), curve: curve) if fill
+      @c.rect(x, y, w, h, curve: curve, stroke: col(accent, 0.72), strokewidth: 1.2)
+      fade_line(x + curve, x + w - curve, y + 0.5, CYAN, alpha: 0.9, width: 1.2, peak: 0.3)
+      fade_line(x + curve, x + w - curve, y + h - 0.5, BOLT, alpha: 0.45, width: 1, peak: 0.6)
+      fade_vline(x + 0.5, y + curve, y + h - curve, CYAN, alpha: 0.35, peak: 0.25)
+    end
+
+    # Kept for callers of the old name.
+    def electric_frame(x, y, w, h, curve: 10)
+      frame(x, y, w, h, curve: curve, fill: false)
+    end
+
+    def box(x, y, w, h, opts = {})
+      curve = opts[:curve] || 8
+      if opts[:fill].is_a?(Array) && opts[:flat]
+        @c.rect(x, y, w, h, curve: curve, fill: opts[:fill])
+      else
+        grad_rect(x, y, w, h, col(CARD_TOP, 0.75), col(PANEL2, 0.75), curve: curve)
+      end
+      @c.rect(x, y, w, h, curve: curve, stroke: opts[:stroke] || col(BORDER, 0.32), strokewidth: opts[:strokewidth] || 1)
+    end
+
+    # A row card. `accent`: a colour for the outline (and a glow when
+    # selected).
+    def card(x, y, w, h, accent: nil, selected: false, curve: 9)
+      c = accent || BORDER
+      @c.glow(x, y, w, h, curve: curve, blur: 10, color: col(selected ? CYAN : c, selected ? 0.35 : 0.10))
+      grad_rect(x, y, w, h, col(CARD_TOP, 0.85), col(PANEL2, 0.85), curve: curve)
+      @c.rect(x, y, w, h, curve: curve, stroke: col(selected ? CYAN : c, selected ? 0.85 : (accent ? 0.5 : 0.30)))
+      fade_line(x + curve, x + w - curve, y + 0.5, selected ? CYAN : c, alpha: selected ? 0.7 : 0.35, peak: 0.25)
+    end
+
     # Filled circle whose top-left corner is (x, y) and diameter d.
     def dot(x, y, color, d = 6)
       @c.circle(x + d / 2.0, y + d / 2.0, d / 2.0, fill: color)
     end
 
+    # A dot with a soft halo. Rings, not a blurred shadow: egui's shadow
+    # turns spiky when the shape is smaller than its blur.
     def glow_dot(x, y, color, d = 6)
-      @c.circle(x + d / 2.0, y + d / 2.0, d / 2.0 + 3, fill: [color[0], color[1], color[2], 0.18])
+      cx = x + d / 2.0
+      cy = y + d / 2.0
+      [[d / 2.0 + 4.5, 0.08], [d / 2.0 + 3, 0.14], [d / 2.0 + 1.5, 0.24]].each do |r, a|
+        @c.circle(cx, cy, r, fill: [color[0], color[1], color[2], a])
+      end
       dot(x, y, color, d)
     end
 
     # A framed dashboard panel. The block draws the body with its origin at
     # the panel's top-left corner just below the title bar.
+    #   icon: an ICONS name before the title; right: a count shown in a pill;
+    #   page: the page its chevron opens.
     def panel(x, y, w, h, opts = {})
-      @c.rect(x, y, w, h, curve: 7, fill: col(PANEL))
-      electric_frame(x, y, w, h, curve: 7)
+      frame(x, y, w, h)
       if opts[:title]
-        txt(opts[:title], x + 16, y + 11, size: 11, color: TEXT, weight: :bold, kerning: 1)
-        fade_line(x + 10, x + w - 10, y + Layout::PANEL_TITLE_H - 1, BOLT)
+        tx = x + 18
+        if opts[:icon]
+          icon(opts[:icon], tx + 8, y + 19, 17, col(CYAN))
+          tx += 26
+        end
+        txt(opts[:title], tx, y + 12, size: 12.5, color: TEXT, weight: :semibold, kerning: 0.6)
+        if opts[:host]
+          hx = tx + text_w(opts[:title], 12.5, :semibold, kerning: 0.6)
+          txt(fit_text("· #{opts[:host]}", x + w - hx - 28, 12, :medium), hx + 8, y + 12.5, size: 12, color: TEXT, weight: :medium)
+        end
+        fade_line(x + 12, x + w - 12, y + Layout::PANEL_TITLE_H, BORDER, alpha: 0.55, peak: 0.3)
+      end
+      rx = x + w - 14
+      if opts[:page]
+        icon("chevron-right", rx - 6, y + 19, 14, col(CYAN, 0.8))
+        @c.hit(rx - 16, y + 6, 22, 26) { show_page(opts[:page]) }
+        rx -= 20
       end
       if opts[:right]
-        rw = opts[:right_w] || 120
-        txt(opts[:right], x + w - 16 - rw, y + 11, size: 10, color: opts[:right_color] || CYAN, width: rw, align: :right)
+        pill_w = text_w(opts[:right], 11, :medium) + 32
+        px = rx - pill_w
+        c = opts[:right_color] || CYAN
+        @c.rect(px, y + 7, pill_w, 24, curve: 12, fill: col(c, 0.07), stroke: col(c, 0.45))
+        txt(opts[:right], px + 12, y + 11.5, size: 11, color: c, weight: :medium)
+        icon("chevron-right", px + pill_w - 13, y + 19, 11, col(c, 0.9))
       end
       @c.group(x, y + Layout::PANEL_TITLE_H) { yield } if block_given?
-    end
-
-    # Lightning-style outline: a wide faint halo, a brighter glow, a bright
-    # electric core with a white-hot hairline, glowing corner brackets, and a
-    # jagged spark on the top and bottom edges. The sparks are seeded by
-    # position, so each frame has its own bolt and it never flickers.
-    def electric_frame(x, y, w, h, curve: 7)
-      @c.rect(x - 2, y - 2, w + 4, h + 4, curve: curve + 2, stroke: col(EDGE, 0.16), strokewidth: 7)
-      @c.rect(x - 0.5, y - 0.5, w + 1, h + 1, curve: curve + 0.5, stroke: col(BOLT, 0.35), strokewidth: 3)
-      @c.rect(x, y, w, h, curve: curve, stroke: col(BOLT), strokewidth: 1.4)
-      @c.rect(x, y, w, h, curve: curve, stroke: col(SPARK, 0.45), strokewidth: 0.5)
-
-      arm = [[w, h].min / 6, 22].min
-      [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + h, 1, -1], [x + w, y + h, -1, -1]].each do |cx, cy, sx, sy|
-        [[[cx + sx * curve, cy], [cx + sx * (curve + arm), cy]],
-         [[cx, cy + sy * curve], [cx, cy + sy * (curve + arm)]]].each do |(x1, y1), (x2, y2)|
-          @c.line(x1, y1, x2, y2, stroke: col(CYAN, 0.35), strokewidth: 4)
-          @c.line(x1, y1, x2, y2, stroke: col(SPARK, 0.95), strokewidth: 1.4)
-        end
-      end
-
-      rng = Random.new((x * 73 + y * 31 + w).to_i)
-      spark(x + w * (0.55 + rng.rand * 0.15), y, [w * 0.18, 140].min, rng)
-      spark(x + w * (0.08 + rng.rand * 0.15), y + h, [w * 0.12, 90].min, rng)
-    end
-
-    # A jagged bolt along a horizontal edge: glow first, then the hot core.
-    def spark(x, y, len, rng)
-      n = 9
-      pts = (0..n).map { |i| [x + len * i / n, y + (i.zero? || i == n ? 0 : (rng.rand * 5 - 2.5))] }
-      [[col(BOLT, 0.3), 4], [col(CYAN, 0.8), 1.6], [col(SPARK), 0.7]].each do |c, sw|
-        pts.each_cons(2) { |(x1, y1), (x2, y2)| @c.line(x1, y1, x2, y2, stroke: c, strokewidth: sw) }
-      end
-      @c.circle(pts.last[0], pts.last[1], 2.2, fill: col(SPARK, 0.9))
-      @c.circle(pts.last[0], pts.last[1], 5, fill: col(CYAN, 0.18))
-    end
-
-    # A divider that is brightest on the left and fades out to the right.
-    def fade_line(x1, x2, y, color_hex)
-      steps = 8
-      seg = (x2 - x1) / steps.to_f
-      steps.times do |i|
-        a = 0.55 * (1 - i / steps.to_f)**1.6
-        @c.line(x1 + seg * i, y, x1 + seg * (i + 1), y, stroke: col(color_hex, a), strokewidth: 1)
-      end
     end
 
     # ---- indicators ----------------------------------------------------
 
     def status_pill(x, y, status, opts = {})
       c = Theme.status_color(status)
-      dot(x, y + 4, col(c), 6)
-      txt(status, x + 10, y - 1, size: opts[:size] || 9, color: c)
+      d = 7
+      (status == "Busy" || status == "Needs you") ? glow_dot(x, y + 4, col(c), d) : dot(x, y + 4, col(c), d)
+      txt(status, x + 13, y, size: opts[:size] || 10.5, color: c == SLATE ? MUTED : c, weight: :medium)
     end
 
     def priority_pill(x, y, priority)
@@ -141,86 +232,103 @@ module BotOps
 
     def hbar(x, y, w, h, pct, color_hex, opts = {})
       pct = [[pct.to_f, 0].max, 100].min
-      @c.rect(x, y, w, h, curve: h / 2.0, fill: col(TRACK))
+      @c.rect(x, y, w, h, curve: h / 2.0, fill: col(TRACK, 0.8))
       fw = (w * pct / 100.0).round
       return unless fw > 0
-      @c.rect(x, y, [fw, h].max, h, curve: h / 2.0, fill: col(color_hex))
-      @c.rect(x, y - 1, [fw, h].max, h + 2, curve: h / 2.0, stroke: col(color_hex, 0.25)) unless opts[:no_glow]
+      @c.glow(x, y, [fw, h].max, h, curve: h / 2.0, blur: 6, color: col(color_hex, 0.5)) unless opts[:no_glow]
+      grad_rect(x, y, [fw, h].max, h, col(shade(color_hex, 0.2)), col(tint(color_hex, 0.2)), curve: h / 2.0, across: true)
     end
 
-    # Circular gauge: track ring, coloured arc, percentage inside.
+    # Points along a circle from start_deg sweeping sweep_deg (0 = 3 o'clock,
+    # clockwise).
+    def arc_points(cx, cy, r, start_deg, sweep_deg)
+      n = [(sweep_deg.abs / 4.0).ceil, 2].max
+      (0..n).map { |i| a = (start_deg + sweep_deg * i / n.to_f) * Math::PI / 180; [cx + r * Math.cos(a), cy + r * Math.sin(a)] }
+    end
+
+    # Ring gauge: a dark track, a glowing arc from 12 o'clock with round
+    # ends, the percentage in the middle and a label beneath.
     def donut(cx, cy, r, pct, color_hex, opts = {})
-      thickness = opts[:thickness] || 7
+      thickness = opts[:thickness] || 9
       pct = [[pct.to_f, 0].max, 100].min
-      @c.circle(cx, cy, r, fill: col(TRACK))
-      @c.wedge(cx, cy, r, -90, 360.0 * pct / 100.0, fill: col(color_hex)) if pct > 0
-      @c.circle(cx, cy, r - thickness, fill: col(PANEL))
-      txt("#{pct.round}%", cx - r, cy - 8, size: 12, color: TEXT, weight: :bold, width: r * 2, align: :center)
-      label(opts[:label], cx - r - 10, cy + r + 6, size: 10, color: TEXT, width: r * 2 + 20, align: :center) if opts[:label]
+      rr = r - thickness / 2.0
+      @c.circle(cx, cy, rr, stroke: col(TRACK), strokewidth: thickness)
+      if pct > 0.5
+        pts = arc_points(cx, cy, rr, -90, 360.0 * pct / 100.0)
+        @c.polyline(pts, stroke: col(color_hex, 0.22), strokewidth: thickness + 8, round: true)
+        @c.polyline(pts, stroke: col(color_hex), strokewidth: thickness, round: true)
+        # A lighter leading edge, like light running along the ring.
+        tail = pts.last([pts.size / 3, 2].max)
+        @c.polyline(tail, stroke: col(tint(color_hex, 0.35), 0.6), strokewidth: thickness * 0.35, round: true)
+      end
+      txt("#{pct.round}%", cx - r, cy - 10, size: 16, color: TEXT, weight: :bold, width: r * 2, align: :center)
+      return unless opts[:label]
+      txt(opts[:label], cx - r - 10, cy + r + 8, size: 11, color: tint(CYAN, 0.25), weight: :medium, width: r * 2 + 20, align: :center)
     end
 
-    # glyph is a character, or :cloud for the drawn cloud icon.
-    def avatar(x, y, color_hex, glyph, d = 30)
-      @c.circle(x + d / 2.0, y + d / 2.0, d / 2.0, fill: col(color_hex, 0.18), stroke: col(color_hex, 0.95))
-      icon_glyph(glyph, x, y, d, color_hex)
+    # ---- icons ---------------------------------------------------------
+
+    # A line icon from ICONS (Lucide's 24-unit box), `size` wide, centred
+    # on (cx, cy). Brand marks are outlines, so they get a finer line.
+    def icon(name, cx, cy, size, color, width: nil)
+      lines = ICONS[name.to_s] or return
+      k = size / 24.0
+      sw = width || [(name.to_s == "vscode" ? 1.25 : 2.0) * k, 1.0].max
+      ox = cx - size / 2.0
+      oy = cy - size / 2.0
+      lines.each do |closed, flat|
+        pts = flat.each_slice(2).map { |px, py| [ox + px * k, oy + py * k] }
+        @c.polyline(pts, stroke: color, strokewidth: sw, closed: closed, round: true)
+      end
     end
 
-    def square_icon(x, y, color_hex, glyph, d = 28)
-      @c.rect(x, y, d, d, curve: 6, fill: col(color_hex, 0.18), stroke: col(color_hex, 0.95))
-      icon_glyph(glyph, x, y, d, color_hex)
-    end
-
-    def icon_glyph(glyph, x, y, d, color_hex)
-      if glyph == :cloud
-        cloud_icon(x + d / 2.0, y + d / 2.0, d * 0.64, col(color_hex), strokewidth: [d / 18.0, 1.4].max)
+    # What goes on a disc or tile: an ICONS name, :cloud, or a letter.
+    def icon_glyph(glyph, x, y, d, color)
+      name = glyph == :cloud ? "cloud" : glyph.to_s
+      if ICONS.key?(name)
+        icon(name, x + d / 2.0, y + d / 2.0, d * 0.5, color)
       else
-        txt(glyph, x, y + d / 2 - 8, size: 12, color: color_hex, width: d, align: :center)
+        size = d * 0.46
+        txt(glyph, x, y + d / 2.0 - size * 0.6, size: size, color: color.is_a?(Array) ? "#FFFFFF" : color,
+                                                 weight: :semibold, width: d, align: :center)
       end
     end
 
-    # The outline of a cloud, three round lobes over a flat rounded base,
-    # as points in a unit box (width 1, centred on 0.5, 0.5). Traced once by
-    # bisecting rays from the middle against the shapes' signed distances.
-    CLOUD_OUTLINE = begin
-      circle = ->(px, py, cx, cy, r) { Math.hypot(px - cx, py - cy) - r }
-      # rounded box centred (0.51, 0.565), half size 0.35 x 0.105, corners 0.10
-      base = lambda do |px, py|
-        qx = (px - 0.51).abs - (0.35 - 0.10)
-        qy = (py - 0.565).abs - (0.105 - 0.10)
-        Math.hypot([qx, 0].max, [qy, 0].max) + [[qx, qy].max, 0].min - 0.10
-      end
-      sdf = lambda do |px, py|
-        [circle.(px, py, 0.31, 0.50, 0.15), circle.(px, py, 0.50, 0.40, 0.20),
-         circle.(px, py, 0.715, 0.48, 0.16), base.(px, py)].min
-      end
-      ox, oy = 0.51, 0.52
-      pts = (0...120).map do |i|
-        a = 2 * Math::PI * i / 120
-        lo, hi = 0.0, 0.7
-        40.times { mid = (lo + hi) / 2; sdf.(ox + mid * Math.cos(a), oy + mid * Math.sin(a)) <= 0 ? lo = mid : hi = mid }
-        [ox + lo * Math.cos(a), oy + lo * Math.sin(a)]
-      end
-      xs, ys = pts.map(&:first), pts.map(&:last)
-      w = xs.max - xs.min
-      mx, my = (xs.max + xs.min) / 2, (ys.max + ys.min) / 2
-      pts.map { |x, y| [0.5 + (x - mx) / w, 0.5 + (y - my) / w] }.freeze
+    # A glowing gradient disc with a white icon: light from the top left,
+    # deeper toward the bottom right.
+    def avatar(x, y, color_hex, glyph, d = 30, dim: false)
+      cx = x + d / 2.0
+      cy = y + d / 2.0
+      base = dim ? mix(color_hex, SLATE, 0.6) : color_hex
+      @c.glow(x, y, d, d, curve: d / 2.0, blur: d * 0.35, color: col(base, dim ? 0.15 : 0.35))
+      grad_circle(cx, cy, d / 2.0, col(tint(base, 0.18)), col(shade(base, 0.38)))
+      @c.circle(cx, cy, d / 2.0 - 0.5, stroke: col(tint(base, 0.45), 0.45), strokewidth: 1)
+      icon_glyph(glyph, x, y, d, col("#FFFFFF", dim ? 0.7 : 0.97))
     end
 
-    # A hollow cloud, w wide, centred on (cx, cy).
-    def cloud_icon(cx, cy, w, color, strokewidth: 1.6)
-      pts = CLOUD_OUTLINE.map { |x, y| [cx + (x - 0.5) * w, cy + (y - 0.5) * w] }
-      @c.polyline(pts, stroke: color, strokewidth: strokewidth, closed: true)
+    # The same as a rounded tile.
+    def square_icon(x, y, color_hex, glyph, d = 28)
+      curve = d * 0.24
+      @c.glow(x, y, d, d, curve: curve, blur: d * 0.35, color: col(color_hex, 0.32))
+      @c.gradient(Canvas.rounded_rect(x, y, d, d, curve), x, y, x + d, y + d,
+                  from: col(tint(color_hex, 0.18)), to: col(shade(color_hex, 0.38)))
+      @c.rect(x, y, d, d, curve: curve, stroke: col(tint(color_hex, 0.45), 0.4))
+      icon_glyph(glyph, x, y, d, col("#FFFFFF", 0.97))
     end
 
     # Pill-shaped tab; returns its width. The block runs when it is clicked.
     def tab(x, y, text, active, opts = {}, &on_click)
-      w = opts[:width] || (text.length * 7 + 22)
-      c = opts[:color] || CYAN
-      @c.rect(x, y, w, 20, curve: 10,
-              fill: active ? col(c, 0.18) : col(PANEL2),
-              stroke: active ? col(c, 0.9) : col(EDGE_SOFT, 0.8))
-      txt(text, x, y + 3, size: 9, color: active ? c : MUTED, width: w, align: :center)
-      @c.hit(x, y, w, 20, &on_click) if on_click
+      h = opts[:height] || 24
+      w = opts[:width] || (text_w(text, 11, :medium) + 30).round
+      if active
+        @c.glow(x, y, w, h, curve: h / 2.0, blur: 10, color: col(BOLT, 0.45))
+        grad_rect(x, y, w, h, col("#3C8BFF"), col("#1D5BE0"), curve: h / 2.0)
+        @c.rect(x, y, w, h, curve: h / 2.0, stroke: col(tint(CYAN, 0.3), 0.75))
+      else
+        @c.rect(x, y, w, h, curve: h / 2.0, fill: col(PANEL2, 0.8), stroke: col(BORDER, 0.55))
+      end
+      txt(text, x, y + (h - 11) / 2.0 - 1, size: 11, color: active ? "#FFFFFF" : TEXT, weight: :medium, width: w, align: :center)
+      @c.hit(x, y, w, h, &on_click) if on_click
       w
     end
 
@@ -228,8 +336,12 @@ module BotOps
     def link(text, x, y, opts = {}, &on_click)
       size = opts[:size] || 9
       txt(text, x, y, { size: size, color: CYAN }.merge(opts))
-      w = opts[:width] || Canvas.text_width(text, size)
+      w = opts[:width] || text_w(text, size, opts[:weight] || :normal)
       @c.hit(x - 2, y - 2, w + 4, size + 8, &on_click)
+    end
+
+    def chevron(cx, cy, color = col(MUTED, 0.8), size = 13)
+      icon("chevron-right", cx, cy, size, color)
     end
 
     # ---- charts --------------------------------------------------------
@@ -237,8 +349,8 @@ module BotOps
     def line_chart(x, y, w, h, labels, series, opts = {})
       max = opts[:max] || 60
       steps = opts[:steps] || 6
-      pad_l = 26
-      pad_b = 18
+      pad_l = 30
+      pad_b = 20
       gx = x + pad_l
       gy = y
       gw = w - pad_l
@@ -246,32 +358,38 @@ module BotOps
 
       steps.downto(0) do |i|
         yy = gy + gh - (gh * i / steps.to_f)
-        hline(gx, gx + gw, yy, col(CYAN, 0.08))
-        label((max * i / steps).round, x, yy - 7, size: 8, width: pad_l - 6, align: :right)
+        hline(gx, gx + gw, yy, col(BORDER, i.zero? ? 0.35 : 0.16))
+        label((max * i / steps).round, x - 4, yy - 7, size: 10, color: MUTED, width: pad_l - 4, align: :right)
       end
 
       n = labels.size
       return if n < 2
       xs = (0...n).map { |i| gx + (gw * i / (n - 1).to_f) }
       labels.each_with_index do |lab, i|
-        vline(xs[i], gy, gy + gh, col(CYAN, 0.05))
-        label(lab, xs[i] - 20, gy + gh + 4, size: 8, width: 40, align: :center)
+        vline(xs[i], gy, gy + gh, col(BORDER, 0.10))
+        label(lab, xs[i] - 26, gy + gh + 6, size: 10, color: MUTED, width: 52, align: :center)
       end
 
       series.each do |s|
         pts = s[:values].each_with_index.map { |v, i| [xs[i], gy + gh - (gh * [[v, 0].max, max].min / max.to_f)] }
         next if pts.size < 2
         c = col(s[:color])
-        @c.area(pts, gy + gh, fill: col(s[:color], 0.06))
-        pts.each_cons(2) { |(x1, y1), (x2, y2)| @c.line(x1, y1, x2, y2, stroke: c, strokewidth: 2) }
-        pts.each { |px, py| @c.circle(px, py, 2, fill: c) }
+        @c.area(pts, gy + gh, fill: col(s[:color], 0.38), fade: col(s[:color], 0.0), top_y: gy)
+        @c.polyline(pts, stroke: col(s[:color], 0.16), strokewidth: 5, round: true)
+        @c.polyline(pts, stroke: c, strokewidth: 2, round: true)
+        dense = pts.size > 16
+        pts.each do |px, py|
+          next if py >= gy + gh - 0.5 # points on the floor would only add noise
+          @c.circle(px, py, dense ? 3.5 : 5, fill: col(s[:color], 0.18))
+          @c.circle(px, py, dense ? 2 : 2.8, fill: col(tint(s[:color], 0.3)))
+        end
       end
     end
 
     def legend(x, y, series, gap = 22)
       series.each_with_index do |s, i|
-        dot(x, y + i * gap + 3, col(s[:color]), 7)
-        txt(s[:name], x + 14, y + i * gap - 2, size: 9, color: TEXT)
+        glow_dot(x, y + i * gap + 3, col(s[:color]), 7)
+        txt(s[:name], x + 16, y + i * gap - 1, size: 11, color: TEXT)
       end
     end
   end

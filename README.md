@@ -226,6 +226,25 @@ Rust handles the drag region (the header) natively, draws the frame, and
 executes the window commands. Everything else, including the two-second
 refresh tick, lives in Ruby (`BotOps::NativeHost`).
 
+### Look, fonts and icons
+
+Panels are drawn from a few primitives the native side renders with egui:
+
+- gradient fills (convex shapes whose vertex colours follow the gradient, with an anti-aliased edge)
+- soft glows (egui's blurred shadow shape)
+- fading chart areas
+- lines with round ends
+
+Edge highlights are gradients that peak in one place and fade to nothing toward the corners.
+
+- **Text:** [Inter](https://github.com/rsms/inter), with [Montserrat](https://github.com/JulietaUla/Montserrat) ExtraBold for the title. Both are under the SIL Open Font License (`ext/bot_ops_native/fonts/*-LICENSE.txt`). DejaVu Sans Mono is used for code, with DejaVu Sans as a fallback for symbols.
+  - `lib/bot_ops/font_metrics.rb` holds each font's character widths, so Ruby can truncate and place text by its real width.
+  - Regenerate it with `bundle exec rake metrics` after changing a font.
+- **Icons:** [Lucide](https://lucide.dev) (ISC license), flattened to polylines in `lib/bot_ops/icons.rb`. The Visual Studio Code mark comes from [Simple Icons](https://simpleicons.org) (CC0); the logo is a Microsoft trademark.
+  - Regenerate with `bundle exec rake icons`. This needs the network; the generated file is committed.
+
+To check what the window really draws without screen-recording permission, start the app with `BOT_OPS_SNAPSHOT_DIR` set to a folder. Creating `request` in that folder makes the window save its own frame there as `window.png`.
+
 ### Why Rutie, and which version
 
 The extension is bound with [Rutie](https://github.com/danielpclark/rutie).

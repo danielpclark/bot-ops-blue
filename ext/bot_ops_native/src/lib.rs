@@ -156,33 +156,113 @@ fn area_mesh(points: &[Pos2], base_y: f32, fill: Color32) -> egui::Shape {
 
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert(
-        "DejaVuSans".to_owned(),
-        egui::FontData::from_static(include_bytes!("../fonts/DejaVuSans.ttf")),
-    );
-    fonts.font_data.insert(
-        "DejaVuSans-Bold".to_owned(),
-        egui::FontData::from_static(include_bytes!("../fonts/DejaVuSans-Bold.ttf")),
-    );
-    fonts.font_data.insert(
-        "DejaVuSansMono".to_owned(),
-        egui::FontData::from_static(include_bytes!("../fonts/DejaVuSansMono.ttf")),
-    );
-    fonts
-        .families
-        .entry(FontFamily::Proportional)
-        .or_default()
-        .insert(0, "DejaVuSans".to_owned());
-    fonts
-        .families
-        .entry(FontFamily::Monospace)
-        .or_default()
-        .insert(0, "DejaVuSansMono".to_owned());
-    fonts.families.insert(
-        FontFamily::Name("bold".into()),
-        vec!["DejaVuSans-Bold".to_owned(), "DejaVuSans".to_owned()],
-    );
+    let data = [
+        ("Inter", &include_bytes!("../fonts/Inter-Regular.ttf")[..]),
+        ("Inter-Medium", &include_bytes!("../fonts/Inter-Medium.ttf")[..]),
+        ("Inter-SemiBold", &include_bytes!("../fonts/Inter-SemiBold.ttf")[..]),
+        ("Inter-Bold", &include_bytes!("../fonts/Inter-Bold.ttf")[..]),
+        ("Montserrat-ExtraBold", &include_bytes!("../fonts/Montserrat-ExtraBold.ttf")[..]),
+        // Symbols Inter lacks (arrows, geometric shapes).
+        ("DejaVuSans", &include_bytes!("../fonts/DejaVuSans.ttf")[..]),
+        ("DejaVuSansMono", &include_bytes!("../fonts/DejaVuSansMono.ttf")[..]),
+    ];
+    for (name, bytes) in data {
+        fonts.font_data.insert(name.to_owned(), egui::FontData::from_static(bytes));
+    }
+    let with_fallback = |name: &str| vec![name.to_owned(), "DejaVuSans".to_owned()];
+    fonts.families.insert(FontFamily::Proportional, with_fallback("Inter"));
+    fonts.families.insert(FontFamily::Monospace, vec!["DejaVuSansMono".to_owned(), "DejaVuSans".to_owned()]);
+    for (family, name) in [("medium", "Inter-Medium"), ("semibold", "Inter-SemiBold"), ("bold", "Inter-Bold"),
+                           ("display", "Montserrat-ExtraBold")] {
+        fonts.families.insert(FontFamily::Name(family.into()), with_fallback(name));
+    }
     ctx.set_fonts(fonts);
+}
+
+/// `a` blended toward `b` by t (0..1), unmultiplied.
+fn lerp_color(a: [f32; 4], b: [f32; 4], t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let m = |i: usize| a[i] + (b[i] - a[i]) * t;
+    Color32::from_rgba_unmultiplied(m(0) as u8, m(1) as u8, m(2) as u8, (m(3).clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
+fn color_parts(v: &Value, i: usize) -> Option<[f32; 4]> {
+    let c = v.get(i)?.as_array()?;
+    if c.len() < 4 {
+        return None;
+    }
+    let f = |j: usize| c[j].as_f64().unwrap_or(0.0) as f32;
+    Some([f(0), f(1), f(2), f(3)])
+}
+
+fn points(v: &Value, i: usize) -> Vec<Pos2> {
+    v.get(i)
+        .and_then(|p| p.as_array())
+        .map(|arr| arr.iter().map(|p| Pos2::new(num(p, 0), num(p, 1))).collect())
+        .unwrap_or_default()
+}
+
+/// A convex polygon filled with a linear gradient from `ca` at `from` to
+/// `cb` at `to`. Vertex colours are exact for a linear gradient; a ring of
+/// transparent vertices `feather` points outside the edge anti-aliases it.
+fn gradient_mesh(pts: &[Pos2], from: Pos2, to: Pos2, ca: [f32; 4], cb: [f32; 4], feather: f32) -> egui::Shape {
+    let mut mesh = egui::Mesh::default();
+    let n = pts.len();
+    if n < 3 {
+        return egui::Shape::Noop;
+    }
+    let axis = to - from;
+    let len2 = axis.length_sq().max(1e-6);
+    let at = |p: Pos2| lerp_color(ca, cb, (p - from).dot(axis) / len2);
+    let clear = |p: Pos2| {
+        let c = at(p);
+        Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 0)
+    };
+    // Outward normals: flip if the polygon winds the other way.
+    let area: f32 = (0..n).map(|i| { let (a, b) = (pts[i], pts[(i + 1) % n]); a.x * b.y - b.x * a.y }).sum();
+    let sign = if area > 0.0 { 1.0 } else { -1.0 };
+    let edge_normal = |a: Pos2, b: Pos2| { let d = (b - a).normalized(); Vec2::new(d.y, -d.x) * sign };
+    let centroid = pts.iter().fold(Vec2::ZERO, |acc, p| acc + p.to_vec2()) / n as f32;
+    let c = centroid.to_pos2();
+    mesh.colored_vertex(c, at(c));
+    for p in pts {
+        mesh.colored_vertex(*p, at(*p));
+    }
+    for i in 0..n as u32 {
+        mesh.add_triangle(0, 1 + i, 1 + (i + 1) % n as u32);
+    }
+    let ring = mesh.vertices.len() as u32;
+    for i in 0..n {
+        let prev = pts[(i + n - 1) % n];
+        let next = pts[(i + 1) % n];
+        let normal = (edge_normal(prev, pts[i]) + edge_normal(pts[i], next)).normalized();
+        let o = pts[i] + normal * feather;
+        mesh.colored_vertex(o, clear(pts[i]));
+    }
+    for i in 0..n as u32 {
+        let j = (i + 1) % n as u32;
+        mesh.add_triangle(1 + i, 1 + j, ring + j);
+        mesh.add_triangle(1 + i, ring + j, ring + i);
+    }
+    egui::Shape::mesh(mesh)
+}
+
+/// Filled region between a polyline and a horizontal baseline, fading from
+/// `top` (at y = top_y) to `bottom` (at the baseline).
+fn gradient_area_mesh(pts: &[Pos2], base_y: f32, top_y: f32, top: [f32; 4], bottom: [f32; 4]) -> egui::Shape {
+    let mut mesh = egui::Mesh::default();
+    let at = |y: f32| lerp_color(top, bottom, (y - top_y) / (base_y - top_y).max(1e-3));
+    for w in pts.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let i = mesh.vertices.len() as u32;
+        mesh.colored_vertex(a, at(a.y));
+        mesh.colored_vertex(b, at(b.y));
+        mesh.colored_vertex(Pos2::new(b.x, base_y), at(base_y));
+        mesh.colored_vertex(Pos2::new(a.x, base_y), at(base_y));
+        mesh.add_triangle(i, i + 1, i + 2);
+        mesh.add_triangle(i, i + 2, i + 3);
+    }
+    egui::Shape::mesh(mesh)
 }
 
 // ---- images ----------------------------------------------------------------
@@ -268,6 +348,32 @@ fn show_waiting(count: u32, previous: u32) {
 
 #[cfg(not(target_os = "macos"))]
 fn show_waiting(_count: u32, _previous: u32) {}
+
+// ---- snapshots ---------------------------------------------------------------
+
+/// For checking the real rendering without screen-recording permission:
+/// with BOT_OPS_SNAPSHOT_DIR set, creating <dir>/request makes the window
+/// capture its own frame to <dir>/window.png. Off unless the variable is set.
+fn snapshot(ctx: &egui::Context) {
+    let Some(dir) = std::env::var_os("BOT_OPS_SNAPSHOT_DIR").map(std::path::PathBuf::from) else { return };
+    if std::fs::remove_file(dir.join("request")).is_ok() {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot);
+    }
+    ctx.input(|i| {
+        for e in &i.raw.events {
+            if let egui::Event::Screenshot { image, .. } = e {
+                let [w, h] = image.size;
+                let bytes: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
+                if let Some(img) = image::RgbaImage::from_raw(w as u32, h as u32, bytes) {
+                    let tmp = dir.join("window.tmp.png");
+                    if img.save(&tmp).is_ok() {
+                        let _ = std::fs::rename(&tmp, dir.join("window.png"));
+                    }
+                }
+            }
+        }
+    });
+}
 
 // ---- links -------------------------------------------------------------------
 
@@ -629,25 +735,61 @@ impl HubApp {
                     }
                 }
                 "a" => {
-                    let pts: Vec<Pos2> = cmd
-                        .get(1)
-                        .and_then(|p| p.as_array())
-                        .map(|arr| arr.iter().map(|p| Pos2::new(num(p, 0), num(p, 1))).collect())
-                        .unwrap_or_default();
-                    if let Some(f) = color(cmd, 3) {
-                        painter.add(area_mesh(&pts, num(cmd, 2), f));
+                    // ["a", pts, base_y, fill] or, fading, ["a", pts, base_y, top, bottom, top_y]
+                    let pts = points(cmd, 1);
+                    match (color_parts(cmd, 3), color_parts(cmd, 4)) {
+                        (Some(top), Some(bottom)) => {
+                            painter.add(gradient_area_mesh(&pts, num(cmd, 2), num(cmd, 5), top, bottom));
+                        }
+                        _ => {
+                            if let Some(f) = color(cmd, 3) {
+                                painter.add(area_mesh(&pts, num(cmd, 2), f));
+                            }
+                        }
+                    }
+                }
+                "g" => {
+                    // ["g", pts (convex), [x1, y1, x2, y2], color_a, color_b]
+                    let pts = points(cmd, 1);
+                    let axis = cmd.get(2).cloned().unwrap_or_default();
+                    if let (Some(ca), Some(cb)) = (color_parts(cmd, 3), color_parts(cmd, 4)) {
+                        let feather = 0.5 / painter.ctx().pixels_per_point().max(0.5) * 2.0;
+                        painter.add(gradient_mesh(&pts, Pos2::new(num(&axis, 0), num(&axis, 1)),
+                                                  Pos2::new(num(&axis, 2), num(&axis, 3)), ca, cb, feather));
+                    }
+                }
+                "s" => {
+                    // ["s", x, y, w, h, curve, blur, spread, color]: a soft glow
+                    if let Some(c) = color(cmd, 8) {
+                        let rect = Rect::from_min_size(Pos2::new(num(cmd, 1), num(cmd, 2)), Vec2::new(num(cmd, 3), num(cmd, 4)));
+                        let shadow = egui::epaint::Shadow { offset: Vec2::ZERO, blur: num(cmd, 6), spread: num(cmd, 7), color: c };
+                        painter.add(shadow.as_shape(rect, Rounding::same(num(cmd, 5))));
                     }
                 }
                 "p" => {
                     // ["p", [[x, y], ...], stroke, width, closed]
-                    let pts: Vec<Pos2> = cmd
-                        .get(1)
-                        .and_then(|p| p.as_array())
-                        .map(|arr| arr.iter().map(|p| Pos2::new(num(p, 0), num(p, 1))).collect())
-                        .unwrap_or_default();
+                    let pts = points(cmd, 1);
                     if pts.len() >= 2 {
                         let st = stroke(cmd, 2, 3);
-                        if cmd.get(4).and_then(|c| c.as_bool()).unwrap_or(false) {
+                        let closed = cmd.get(4).and_then(|c| c.as_bool()).unwrap_or(false);
+                        // Round caps and corners (icons): a dot at each end and
+                        // at every corner sharper than ~50 degrees.
+                        if cmd.get(5).and_then(|c| c.as_bool()).unwrap_or(false) {
+                            let r = st.width / 2.0;
+                            let n = pts.len();
+                            for i in 0..n {
+                                let end = !closed && (i == 0 || i == n - 1);
+                                let corner = (closed || (i > 0 && i < n - 1)) && {
+                                    let a = (pts[i] - pts[(i + n - 1) % n]).normalized();
+                                    let b = (pts[(i + 1) % n] - pts[i]).normalized();
+                                    a.dot(b) < 0.64
+                                };
+                                if end || corner {
+                                    painter.circle_filled(pts[i], r, st.color);
+                                }
+                            }
+                        }
+                        if closed {
                             painter.add(egui::Shape::closed_line(pts, st));
                         } else {
                             painter.add(egui::Shape::line(pts, st));
@@ -664,7 +806,8 @@ impl HubApp {
                     // ["t", str, x, y, size, color, weight, family, width, align, kerning]
                     let family = match (text(cmd, 7), text(cmd, 6)) {
                         ("mono", _) => FontFamily::Monospace,
-                        (_, "bold") => FontFamily::Name("bold".into()),
+                        ("display", _) => FontFamily::Name("display".into()),
+                        (_, w @ ("medium" | "semibold" | "bold")) => FontFamily::Name(w.into()),
                         _ => FontFamily::Proportional,
                     };
                     let col = color(cmd, 5).unwrap_or(Color32::WHITE);
@@ -705,6 +848,7 @@ impl HubApp {
 
 impl eframe::App for HubApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        snapshot(ctx);
         if std::mem::take(&mut self.start_fullscreen) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
         }

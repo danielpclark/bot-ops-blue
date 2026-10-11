@@ -15,35 +15,38 @@ class SceneTest < Minitest::Test
     @scene.build
   end
 
-  # Clicks the first clickable +text+; tab: true only matches pill tabs (20pt high).
+  # Clicks the first clickable +text+; tab: true only matches pill tabs (22-24pt high).
   def click_text(canvas, text, tab: false)
+    # A point inside the drawn text: its left edge, or the middle of its box
+    # when centred.
+    at = ->(c) { [c.a[8] == :center && c.a[7] ? c.a[1] + c.a[7] / 2.0 : c.a[1] + 2, c.a[2] + 2] }
     cmd = canvas.cmds.find do |c|
       next false unless c.op == :text && c.a[0] == text
-      h = canvas.hit_at(c.a[1] + 2, c.a[2] + 2)
-      h && (!tab || h.h == 20)
+      h = canvas.hit_at(*at.(c))
+      h && (!tab || h.h.between?(22, 24))
     end
     refute_nil cmd, "no clickable text #{text.inspect}"
-    assert @scene.click(cmd.a[1] + 2, cmd.a[2] + 2)
+    assert @scene.click(*at.(cmd))
   end
 
   def test_overview_draws_every_panel_from_real_data
     c = canvas
-    ["CLAUDE SESSIONS", "LIVE ACTIVITY", "PROJECTS · 24H", "TOOL CALLS", "USAGE", "SYSTEM HEALTH · laptop",
-     "RECENT PROMPTS", "SESSION DETAILS", "EVENT LOG", "MACHINES", "BOT OPS BLUE"].each do |title|
+    ["CLAUDE SESSIONS", "LIVE ACTIVITY", "PROJECTS · 24H", "TOOL CALLS", "USAGE", "SYSTEM HEALTH", "· laptop",
+     "RECENT PROMPTS", "SESSION DETAILS", "EVENT LOG", "MACHINES", "BOT OPS ", "BLUE"].each do |title|
       assert_includes c.texts, title
     end
     assert_includes c.texts, "Fix flaky login test", "sessions are named by what they are working on"
     assert_includes c.texts, "api · CLI · api-fix"
     assert_includes c.texts, "Opus 5.5"
     assert_includes c.texts, "1 MACHINE ONLINE"
-    assert_equal 4, c.count(:wedge), "four health gauges"
+    assert_empty %w[Load Memory Disk Uptime] - c.texts, "four health gauges and their tiles"
   end
 
   def test_header_logo_is_the_bot_portrait_in_a_round_frame
     c = canvas
     logo = c.cmds.find { |cmd| cmd.op == :image }
-    assert_equal ["logo", 60, 43, 28], logo.a
-    assert_includes JSON.parse(c.to_json)["cmds"], ["i", "logo", 60, 43, 28]
+    assert_equal ["logo", 60, 43, 29], logo.a
+    assert_includes JSON.parse(c.to_json)["cmds"], ["i", "logo", 60, 43, 29]
     assert_includes c.to_svg, "data:image/png;base64,", "previews embed the same image"
     assert File.exist?(File.join(BotOps::Canvas::IMAGE_DIR, "logo.png"))
   end
@@ -127,8 +130,11 @@ class FrameTest < Minitest::Test
     assert_equal [0, 0, 1536, 86], frame["drag"]
     assert_equal canvas.count, frame["cmds"].size
     assert_equal canvas.hits.size, frame["hits"].size
-    t = frame["cmds"].find { |c| c[0] == "t" && c[1] == "BOT OPS BLUE" }
-    assert_equal ["bold", "sans", nil, "left", 3], t[6..10]
+    t = frame["cmds"].find { |c| c[0] == "t" && c[1] == "BLUE" }
+    assert_equal ["normal", "display", nil, "left", 1.5], t[6..10]
+    g = frame["cmds"].find { |c| c[0] == "g" }
+    assert_equal 4, g[2].size, "gradients carry their axis"
+    assert(frame["cmds"].any? { |c| c[0] == "s" }, "glows")
   end
 
   def test_native_host_polls_resizes_and_dispatches_hits

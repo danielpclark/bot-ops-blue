@@ -400,15 +400,15 @@ module BotOps
     def stats
       t = totals
       [
-        Stat.new("LIVE SESSIONS",   sessions.size.to_s, "+#{recent_sessions.size} earlier", Theme::MUTED),
+        Stat.new("LIVE SESSIONS",   sessions.size.to_s, "+#{recent_sessions.size} earlier", recent_sessions.empty? ? Theme::MUTED : Theme::GREEN),
         if attention_count.positive?
           Stat.new("BUSY NOW", busy_count.to_s, "#{attention_count} need you", Theme::YELLOW)
         else
           Stat.new("BUSY NOW", busy_count.to_s, "#{sessions.size - busy_count} idle", Theme::MUTED)
         end,
-        Stat.new("PROMPTS (24H)",   Store.count(t[:prompts]), "#{projects.size} projects", Theme::MUTED),
-        Stat.new("TOOL CALLS (24H)", Store.count(t[:tool_calls]), "#{t[:errors]} errors", t[:errors].positive? ? Theme::RED : Theme::MUTED),
-        Stat.new("OUTPUT TOKENS",   Store.count(t[:out_tokens]), "24h", Theme::MUTED)
+        Stat.new("PROMPTS (24H)",   Store.count(t[:prompts]), "#{projects.size} project#{'s' unless projects.size == 1}", Theme::CYAN),
+        Stat.new("TOOL CALLS (24H)", Store.count(t[:tool_calls]), "#{t[:errors]} error#{'s' unless t[:errors] == 1}", t[:errors].positive? ? Theme::RED : Theme::MUTED),
+        Stat.new("OUTPUT TOKENS",   Store.count(t[:out_tokens]), "24h", Theme::CYAN)
       ]
     end
 

@@ -97,6 +97,18 @@ namespace :cloud do
   end
 end
 
+desc "Regenerate lib/bot_ops/icons.rb from Lucide's SVG icons (needs the network)"
+task :icons do
+  require_relative "lib/bot_ops/icon_builder"
+  puts "Wrote #{BotOps::IconBuilder.build} icons to #{BotOps::IconBuilder::PATH}"
+end
+
+desc "Regenerate lib/bot_ops/font_metrics.rb from the bundled fonts"
+task :metrics do
+  require_relative "lib/bot_ops/metrics_builder"
+  puts "Wrote metrics for #{BotOps::MetricsBuilder.build} fonts to #{BotOps::MetricsBuilder::PATH}"
+end
+
 desc "Run the Bot Ops Blue desktop app"
 task :run do
   Rake::Task[:compile].invoke unless File.exist?(INSTALLED)

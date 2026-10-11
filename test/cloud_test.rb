@@ -84,7 +84,7 @@ class CloudFeedTest < Minitest::Test
     assert_includes store.machines.map { |m| m["host"] }, "claude.ai"
     c = BotOps::Scene.new(store, BotOps::PreviewHost.new).build
     assert_includes c.texts, "tern · Cloud"
-    assert_includes c.texts, "SYSTEM HEALTH · laptop", "health stays on a real machine"
+    assert_includes c.texts, "· laptop", "health stays on a real machine"
   end
 end
 
