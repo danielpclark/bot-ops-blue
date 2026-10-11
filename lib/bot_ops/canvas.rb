@@ -114,8 +114,9 @@ module BotOps
     # Compact JSON understood by ext/bot_ops_native (see src/lib.rs).
     # drag: the region that moves the window; resize: the grip that resizes
     # it; pan: where a drag pans the content (an open overlay's body).
-    def to_frame(drag: nil, resize: nil, pan: nil)
+    def to_frame(drag: nil, resize: nil, pan: nil, badge: 0)
       {
+        "badge" => badge,
         "cmds" => @cmds.map { |c| [OPS[c.op]] + encode_args(c) },
         "hits" => @hits.each_with_index.map { |h, i| [h.x, h.y, h.w, h.h, i] },
         "drag" => drag,
@@ -124,14 +125,14 @@ module BotOps
       }
     end
 
-    def to_json(drag: nil, resize: nil, pan: nil)
-      JSON.generate(to_frame(drag: drag, resize: resize, pan: pan))
+    def to_json(drag: nil, resize: nil, pan: nil, badge: 0)
+      JSON.generate(to_frame(drag: drag, resize: resize, pan: pan, badge: badge))
     end
 
     # ---- SVG export (tests, previews) -------------------------------------
 
     def to_svg
-      out = +%(<svg xmlns="http://www.w3.org/2000/svg" width="#{@width}" height="#{@height}" font-family="DejaVu Sans, sans-serif">)
+      out = +%(<svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" width="#{@width}" height="#{@height}" font-family="DejaVu Sans, sans-serif">)
       clips = 0
       @cmds.each do |c|
         case c.op

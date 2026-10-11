@@ -39,6 +39,9 @@ struct Frame {
     /// Where a drag pans the content (an open overlay's body).
     #[serde(default)]
     pan: Option<(f32, f32, f32, f32)>,
+    /// Sessions waiting on the person (Dock badge).
+    #[serde(default)]
+    badge: u32,
 }
 
 struct HubApp {
@@ -68,6 +71,8 @@ struct HubApp {
     scroll_lines: f32,
     /// Sideways scrolling not yet sent to Ruby, in points.
     scroll_x: f32,
+    /// The Dock badge shown now.
+    badge: u32,
     /// While dragging an overlay's body: the pointer position last sent.
     panning: Option<Pos2>,
     /// Monospace advance last reported to Ruby (thousandths of a point).
@@ -244,6 +249,26 @@ fn place_window(cc: &eframe::CreationContext<'_>, left: f64, top: f64) {
     window.setFrameTopLeftPoint(NSPoint::new(left, primary_height - top));
 }
 
+// ---- Dock ------------------------------------------------------------------
+
+/// Shows `count` on the Dock icon (nothing for 0) and, when it went up,
+/// bounces the icon once: a session started waiting on the person.
+#[cfg(target_os = "macos")]
+fn show_waiting(count: u32, previous: u32) {
+    use objc2_app_kit::{NSApplication, NSRequestUserAttentionType};
+    use objc2_foundation::{MainThreadMarker, NSString};
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let app = NSApplication::sharedApplication(mtm);
+    let label = (count > 0).then(|| NSString::from_str(&count.to_string()));
+    unsafe { app.dockTile().setBadgeLabel(label.as_deref()) };
+    if count > previous {
+        app.requestUserAttention(NSRequestUserAttentionType::NSInformationalRequest);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn show_waiting(_count: u32, _previous: u32) {}
+
 // ---- links -------------------------------------------------------------------
 
 /// Opens a cloud session's page in the default browser. Only
@@ -288,6 +313,15 @@ impl HubApp {
         })
     }
 
+    /// Like call_host, with one String argument.
+    fn call_host_text(&self, method: &str, text: &str) -> Result<String, ()> {
+        let host = &self.host;
+        Thread::call_with_gvl(|| match host.protect_send(method, &[RString::new_utf8(text).to_any_object()]) {
+            Ok(obj) => Ok(obj.try_convert_to::<RString>().map(|s| s.to_string()).unwrap_or_default()),
+            Err(_) => Err(()),
+        })
+    }
+
     fn poll_ruby(&mut self, ctx: &egui::Context) {
         match self.call_host("poll", &[]) {
             Ok(json) if json.is_empty() => self.poll_failures = 0,
@@ -296,6 +330,10 @@ impl HubApp {
             Ok(json) => match serde_json::from_str::<Frame>(&json) {
                 Ok(frame) => {
                     self.poll_failures = 0;
+                    if frame.badge != self.badge {
+                        show_waiting(frame.badge, self.badge);
+                        self.badge = frame.badge;
+                    }
                     self.hits_rects = frame
                         .hits
                         .iter()
@@ -496,6 +534,26 @@ impl HubApp {
             (i.key_pressed(Key::Escape), i.key_pressed(Key::F11) || ctrl_cmd_f)
         });
         let esc = esc && self.call_host("key", &[27]).map(|r| r != "handled").unwrap_or(true);
+        // Navigation keys and typed text go to Ruby (search, session list).
+        let (keys, typed) = ctx.input(|i| {
+            let keys: Vec<i64> = [(Key::ArrowUp, 38), (Key::ArrowDown, 40), (Key::Enter, 13), (Key::Backspace, 8)]
+                .iter()
+                .filter(|(k, _)| i.key_pressed(*k))
+                .map(|(_, code)| *code)
+                .collect();
+            let typed: String = i
+                .events
+                .iter()
+                .filter_map(|e| if let egui::Event::Text(t) = e { Some(t.as_str()) } else { None })
+                .collect();
+            (keys, typed)
+        });
+        for code in keys {
+            let _ = self.call_host("key", &[code]);
+        }
+        if !typed.is_empty() {
+            let _ = self.call_host_text("text", &typed);
+        }
         if esc && is_fullscreen(ctx) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
         } else if toggle {
@@ -802,6 +860,7 @@ rutie::methods!(
                             poll_failures: 0,
                             scroll_lines: 0.0,
                             scroll_x: 0.0,
+                            badge: 0,
                             panning: None,
                             mono_advance: None,
                             resizing: None,

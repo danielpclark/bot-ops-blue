@@ -7,6 +7,7 @@
 # is driven by BotOps::NativeHost.
 require "bot_ops/theme"
 require "bot_ops/layout"
+require "bot_ops/history"
 require "bot_ops/store"
 require "bot_ops/probe"
 require "bot_ops/collector"

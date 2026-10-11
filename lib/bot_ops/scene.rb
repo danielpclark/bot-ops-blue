@@ -69,6 +69,7 @@ module BotOps
         txt(s.value, x, 40, size: 20, color: TEXT, weight: :bold)
         off = 10 + s.value.length * 12
         txt(clip(s.note, (STAT_WIDTHS[i] - off - 12) / 5), x + off, 46, size: 8, color: s.note_color)
+        @c.hit(x - 4, 16, (STAT_WIDTHS[i] || 110) - 10, hh - 28) { open_overlay(stat_overlay(i)) }
         x += STAT_WIDTHS[i] || 110
         vline(x - 10, 22, hh - 22, col(CYAN, 0.12))
       end
@@ -245,6 +246,22 @@ module BotOps
       @host.invalidate
     end
 
+    # Header stats, left to right: live sessions, busy, prompts, tool calls,
+    # output tokens.
+    def stat_overlay(index)
+      view_overlay([:sessions, :sessions, :prompts, :tools, :tokens][index] || :sessions)
+    end
+
+    def set_chart_range(range)
+      @store.chart_range = range
+      @host.invalidate
+    end
+
+    def toggle_series(key)
+      @store.toggle_series(key)
+      @host.invalidate
+    end
+
     def select_session(id)
       @store.selected_session_id = id
       @host.invalidate
@@ -296,6 +313,69 @@ module BotOps
       true
     end
 
+    KEY_ESC, KEY_UP, KEY_DOWN, KEY_ENTER, KEY_BACKSPACE = 27, 38, 40, 13, 8
+
+    # Keys, in this order of who gets them: the search box, an open overlay
+    # (arrows scroll it), then the sessions list (Up/Down select, Enter opens
+    # the timeline). True when something used the key.
+    def key(code)
+      o = @store.overlay
+      return escape if code == KEY_ESC
+      if o&.search?
+        results = @store.search(o.query)
+        case code
+        when KEY_BACKSPACE then o.query = o.query[0...-1]; o.selected = 0
+        when KEY_UP then o.selected = [o.selected - 1, 0].max
+        when KEY_DOWN then o.selected = [o.selected + 1, [results.size - 1, 0].max].min
+        when KEY_ENTER then results[o.selected] ? open_overlay(event_overlay(results[o.selected])) : nil
+        else return false
+        end
+      elsif o
+        case code
+        when KEY_UP then o.scroll_by(-1)
+        when KEY_DOWN then o.scroll_by(1)
+        else return false
+        end
+      else
+        case code
+        when KEY_UP, KEY_DOWN then move_selection(code == KEY_UP ? -1 : 1)
+        when KEY_ENTER then (s = @store.selected_session) ? open_overlay(timeline_overlay(s)) : nil
+        else return false
+        end
+      end
+      @host.invalidate
+      true
+    end
+
+    # Typed text: the query while searching; "/" opens the search box.
+    def text(str)
+      o = @store.overlay
+      if o&.search?
+        clean = str.gsub(/[[:cntrl:]]/, "")
+        return false if clean.empty?
+        o.query << clean
+        o.selected = 0
+      elsif o.nil? && str.include?("/")
+        open_overlay(SearchOverlay.new)
+      else
+        return false
+      end
+      @host.invalidate
+      true
+    end
+
+    def move_selection(by)
+      list = @store.all_sessions
+      return if list.empty?
+      i = list.index { |s| s["id"] == @store.selected_session&.dig("id") } || 0
+      @store.selected_session_id = list[(i + by).clamp(0, list.size - 1)]["id"]
+    end
+
+    def toggle_session_only
+      @store.session_only = !@store.session_only
+      @host.invalidate
+    end
+
     OVERLAY_TEXT = 10
     OVERLAY_LINE = 16
 
@@ -328,6 +408,8 @@ module BotOps
       @c.line(cx + 12, by + 16, cx, by + 28, stroke: col(MUTED), strokewidth: 1.5)
       @c.hit(cx - 6, by + 10, 24, 24) { close_overlay }
       fade_line(bx + 14, bx + bw - 14, by + 56, BOLT)
+
+      return draw_search(o, bx, by, bw, bh) if o.search?
 
       top = by + 68
       body_h = bh - 68 - 30
@@ -378,9 +460,42 @@ module BotOps
       txt(hints.join("  ·  "), bx + 24, by + bh - 18, size: 8, color: DIM)
     end
 
+    # The search box and its results, inside the overlay frame.
+    def draw_search(o, bx, by, bw, bh)
+      top = by + 68
+      @c.rect(bx + 20, top - 4, bw - 40, 28, curve: 6, fill: col(PANEL2), stroke: col(BOLT, 0.8))
+      cursor = (Time.now.to_f * 2).to_i.even? ? "▏" : " "
+      @c.clip(bx + 24, top - 4, bw - 48, 28) do
+        txt(o.query.empty? ? "Type to search…" : o.query + cursor, bx + 32, top + 2, size: 11,
+            color: o.query.empty? ? DIM : TEXT, mono: true)
+      end
+      results = @store.search(o.query)
+      o.selected = o.selected.clamp(0, [results.size - 1, 0].max)
+      list_top = top + 36
+      rows = (bh - (list_top - by) - 30) / OVERLAY_LINE
+      first = [o.selected - rows + 1, 0].max
+      @c.clip(bx + 16, list_top - 2, bw - 32, rows * OVERLAY_LINE + 4) do
+        results[first, rows].to_a.each_with_index do |e, i|
+          y = list_top + i * OVERLAY_LINE
+          if first + i == o.selected
+            @c.rect(bx + 18, y - 2, bw - 36, OVERLAY_LINE, curve: 3, fill: col(BOLT, 0.18))
+          end
+          kind = e["kind"] == "tool" ? e["title"] : e["kind"]
+          line = "#{Time.at(e['at'].to_f).strftime('%H:%M')}  #{kind.to_s.ljust(10)[0, 10]}  #{e['session'].to_s[0, 28].ljust(28)}  #{e['detail']}"
+          txt(line, bx + 24, y, size: OVERLAY_TEXT, color: e["kind"] == "error" ? RED : TEXT, mono: true)
+          @c.hit(bx + 18, y - 2, bw - 36, OVERLAY_LINE) { open_overlay(event_overlay(e)) }
+        end
+      end
+      status = if o.query.strip.empty? then "Search words must all appear (case-insensitive)."
+               elsif results.empty? then "No matches."
+               else "#{results.size}#{results.size == 200 ? '+' : ''} matches  ·  Up/Down to choose, Enter or click to open"
+               end
+      txt("#{status}  ·  Esc closes", bx + 24, by + bh - 18, size: 8, color: DIM)
+    end
+
     # The overlay's body, where a drag pans the text ([x, y, w, h]), or nil.
     def pan_region
-      return nil unless @store.overlay
+      return nil if @store.overlay.nil? || @store.overlay.search?
       w, h = @width, @height
       bw = [[w - 260, 1040].min, 560].max
       bh = [[h - 200, 780].min, 320].max

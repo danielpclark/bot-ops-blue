@@ -25,6 +25,10 @@ module BotOps
   class Probe
     WINDOW_S = 24 * 3600
     RECENT_S = 12 * 3600
+    # Hourly usage reaches back further than events: a week for the
+    # dashboard's own machine (full_detail), a day in agent snapshots.
+    USAGE_DAYS_FULL = 7
+    USAGE_DAYS_AGENT = 1
     EVENT_LIMIT = 1000
 
     # full_detail: also keep each event's full text (a tool call's whole input,
@@ -57,6 +61,7 @@ module BotOps
         "events" => (@transcripts.events(now) + @hooks.events(now)).sort_by { |e| -e["at"] }.first(EVENT_LIMIT),
         "hooks" => @hooks.installed?,
         "hourly" => @transcripts.hourly(now),
+        "usage" => @transcripts.usage(now),
         "projects" => @transcripts.projects(now),
         "recent" => @transcripts.recent(now, live_ids)
       }
@@ -236,6 +241,9 @@ module BotOps
     class Transcripts
       TOOL_DETAIL_KEYS = %w[command file_path pattern url query description prompt skill].freeze
 
+      # Per [project, hour, model]: tokens in each direction, and counts.
+      USAGE_FIELDS = %w[out in cache_read cache_write tools prompts errors].freeze
+      OUT, IN, CACHE_READ, CACHE_WRITE, TOOLS, PROMPTS, ERRORS = (0...USAGE_FIELDS.size).to_a
       FULL_LIMIT = 12_000   # characters of full text kept per event
       VALUE_LIMIT = 4_000   # per string inside a tool's input
 
@@ -246,7 +254,10 @@ module BotOps
         @sessions = {}
         @seen = {}
         @events = []
-        @buckets = Hash.new { |h, k| h[k] = [0, 0, 0, 0] } # [cwd, hour] => [out_tokens, tools, prompts, errors]
+        # [cwd, hour, model] => USAGE_FIELDS counts (model "" for tool/prompt/error counts)
+        @buckets = Hash.new { |h, k| h[k] = Array.new(USAGE_FIELDS.size, 0) }
+        @usage_days = full_detail ? USAGE_DAYS_FULL : USAGE_DAYS_AGENT
+        @pending_tools = {} # tool_use_id => [started at, tool name, its event or nil]
       end
 
       def session(id)
@@ -255,10 +266,11 @@ module BotOps
 
       def refresh(now)
         cutoff = now.to_f - WINDOW_S
+        @usage_cutoff = hour_of(now.to_f) - (@usage_days * 24 - 1) * 3600
         files = Dir.glob(File.join(@dir, "*", "*.jsonl")) + Dir.glob(File.join(@dir, "*", "*", "subagents", "*.jsonl"))
         files.each do |path|
           mtime = File.mtime(path).to_f rescue next
-          next if mtime < cutoff && !@offsets.key?(path)
+          next if mtime < @usage_cutoff && !@offsets.key?(path)
           read_new(path, cutoff)
         end
         prune(now)
@@ -272,9 +284,17 @@ module BotOps
       # [[hour_start_epoch, out_tokens, tool_calls, prompts, errors], ...] oldest first.
       def hourly(now)
         sums = Hash.new { |h, k| h[k] = [0, 0, 0, 0] }
-        @buckets.each { |(_, hour), v| v.each_with_index { |n, i| sums[hour][i] += n } }
+        @buckets.each { |(_, hour, _), v| sums[hour] = sums[hour].zip(v.values_at(OUT, TOOLS, PROMPTS, ERRORS)).map(&:sum) }
         first = hour_of(now.to_f) - 23 * 3600
         (0..23).map { |i| h = first + i * 3600; [h, *sums[h]] }
+      end
+
+      # [[hour, project, model, out, in, cache_read, cache_write, tools,
+      # prompts, errors], ...] for the usage window, non-zero rows only.
+      def usage(_now)
+        @buckets.filter_map do |(cwd, hour, model), v|
+          [hour, File.basename(cwd), model, *v] if v.any?(&:positive?)
+        end.sort_by(&:first)
       end
 
       # Sessions with activity in the last RECENT_S whose process has exited
@@ -294,7 +314,9 @@ module BotOps
       def projects(now)
         cutoff = now.to_f - WINDOW_S
         by_cwd = Hash.new { |h, k| h[k] = { "out_tokens" => 0, "tool_calls" => 0, "prompts" => 0 } }
-        @buckets.each do |(cwd, _), (out, tools, prompts, _)|
+        @buckets.each do |(cwd, hour, _), v|
+          next if hour < cutoff - 3600
+          out, tools, prompts = v.values_at(OUT, TOOLS, PROMPTS)
           p = by_cwd[cwd]
           p["out_tokens"] += out
           p["tool_calls"] += tools
@@ -349,6 +371,7 @@ module BotOps
         at = d["timestamp"] && (Time.iso8601(d["timestamp"]).to_f rescue nil)
         s["last_at"] = [s["last_at"].to_f, at].max if at
         recent = at && at >= cutoff
+        @counted = at && at >= @usage_cutoff.to_f
         case d["type"]
         # A title given by hand (/rename, the claude.ai sidebar) beats the generated one.
         when "ai-title" then s["title"] = d["aiTitle"] unless sidechain || s["custom_title"]
@@ -378,16 +401,22 @@ module BotOps
           t["cache_read"] += u["cache_read_input_tokens"].to_i
           t["cache_write"] += u["cache_creation_input_tokens"].to_i
           s["context"] = u["input_tokens"].to_i + u["cache_read_input_tokens"].to_i + u["cache_creation_input_tokens"].to_i unless sidechain
-          bucket(s, at)[0] += u["output_tokens"].to_i if recent
+          if @counted
+            b = bucket(s, at, m["model"].to_s)
+            b[OUT] += u["output_tokens"].to_i
+            b[IN] += u["input_tokens"].to_i
+            b[CACHE_READ] += u["cache_read_input_tokens"].to_i
+            b[CACHE_WRITE] += u["cache_creation_input_tokens"].to_i
+          end
         end
         Array(m["content"]).each do |b|
           next unless b.is_a?(Hash) && b["type"] == "tool_use"
           s["tool_calls"] += 1
           detail = tool_detail(b["input"])
           s["last_tool"] = { "name" => b["name"], "detail" => detail, "at" => at }
-          next unless recent
-          bucket(s, at)[1] += 1
-          event(s, at, "tool", b["name"].to_s, detail, full: (full_input(b["input"]) if @full_detail))
+          bucket(s, at)[TOOLS] += 1 if @counted
+          ev = (event(s, at, "tool", b["name"].to_s, detail, full: (full_input(b["input"]) if @full_detail)) if recent)
+          @pending_tools[b["id"]] = [at, b["name"].to_s, ev] if b["id"] && at
         end
       end
 
@@ -395,12 +424,17 @@ module BotOps
         c = d.dig("message", "content")
         if c.is_a?(Array)
           c.each do |b|
-            next unless b.is_a?(Hash) && b["type"] == "tool_result" && b["is_error"]
+            next unless b.is_a?(Hash) && b["type"] == "tool_result"
+            started, tool, ev = @pending_tools.delete(b["tool_use_id"])
+            ev["duration"] = (at - started).round(3) if ev && at && started && at >= started
+            next unless b["is_error"]
+            ev["failed"] = true if ev
             s["errors"] += 1
+            bucket(s, at)[ERRORS] += 1 if @counted
             next unless recent
-            bucket(s, at)[3] += 1
             text = text_of(b["content"])
-            event(s, at, "error", "tool error", one_line(text), full: (text if @full_detail))
+            err = event(s, at, "error", "tool error", one_line(text), full: (text if @full_detail))
+            err["tool"] = tool if tool
           end
           text = c.map { |b| b["text"] if b.is_a?(Hash) && b["type"] == "text" }.compact.join(" ")
         else
@@ -416,9 +450,10 @@ module BotOps
         return if text.strip.empty? || text.lstrip.start_with?("<")
         s["prompts"] += 1
         s["prompt_at"] = [s["prompt_at"].to_f, at].max if at
+        bucket(s, at)[PROMPTS] += 1 if @counted
         return unless recent
-        bucket(s, at)[2] += 1
-        event(s, at, "prompt", "prompt", one_line(text), full: (text if @full_detail))
+        ev = event(s, at, "prompt", "prompt", one_line(text), full: (text if @full_detail))
+        ev["context"] = s["context"] if s["context"]
       end
 
       def seen?(sid, msg_id)
@@ -429,8 +464,8 @@ module BotOps
         false
       end
 
-      def bucket(s, at)
-        @buckets[[s["cwd"].to_s, hour_of(at)]]
+      def bucket(s, at, model = "")
+        @buckets[[s["cwd"].to_s, hour_of(at), model]]
       end
 
       def hour_of(t)
@@ -443,11 +478,13 @@ module BotOps
         e["full"] = full.to_s[0, FULL_LIMIT] if full && !full.to_s.strip.empty?
         @events << e
         @events.shift(@events.size - EVENT_LIMIT * 2) if @events.size > EVENT_LIMIT * 3
+        e
       end
 
       def prune(now)
-        oldest = hour_of(now.to_f) - 24 * 3600
-        @buckets.delete_if { |(_, hour), _| hour < oldest }
+        @buckets.delete_if { |(_, hour, _), _| hour < @usage_cutoff }
+        # A call still pending after a day never got its result.
+        @pending_tools.delete_if { |_, (started, _, _)| started < now.to_f - WINDOW_S }
       end
 
       def tool_detail(input)

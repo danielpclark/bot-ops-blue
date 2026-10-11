@@ -69,6 +69,36 @@ up and down, and Esc, its X or a click outside closes it. Full text (a tool's wh
 prompt, an error) is kept for this machine's sessions only; other machines
 and cloud sessions send short excerpts.
 
+More of the dashboard opens a breakdown the same way:
+
+- **Header stats and the Usage tiles:**
+  - Output tokens: by model, project, hour and session, with input and cache tokens and the cache-hit ratio.
+  - Tool calls: by tool, with error rate, median and slowest duration.
+  - Prompts: by project.
+  - Live sessions: every session.
+- **The usage chart:**
+  - Click a column for that hour's or day's breakdown.
+  - Click a legend entry to hide or show its line.
+  - Pick 12h, 24h, 7d or 30d. The range and hidden lines are remembered in `~/.config/bot-ops-blue/prefs.json`.
+- **A project card:** its sessions, branches, output by model and the files edited most.
+- **Timeline** (in Session Details): the selected session's prompts, tool calls with durations, and errors in order. Session Details also shows the context against the model's window, yellow from 80% and red from 95%.
+
+Keys: **/** searches prompts, tool calls and events; **Up/Down** move
+through sessions (or the search results); **Enter** opens the selected
+session's timeline (or the search result); **Esc** closes what's open.
+"this session only", in the Tool Calls and Event Log title bars, narrows
+them to the selected session.
+
+When a session waits on you (a permission prompt, with the hook installed),
+the Dock icon shows how many are waiting and bounces once. A macOS
+notification can be turned on in Settings; it's off by default because a
+script-posted notification opens Script Editor when clicked.
+
+Hourly usage from every source is saved to
+`~/.config/bot-ops-blue/history.json` for 30 days, so the 7d and 30d ranges
+include cloud sessions and other machines, which report only their last
+24 hours. This machine's own transcripts are read back 7 days at startup.
+
 In fullscreen macOS slides its menu bar over the top edge, so use the keys:
 **Esc** leaves fullscreen, **F11** or **Ctrl+Cmd+F** toggles it.
 
@@ -186,6 +216,11 @@ closes. While it runs, Rust calls two methods on `host`:
 | --- | --- |
 | `host.poll` | JSON frame (`cmds`, `hits`, `drag`) when something changed, else `""` |
 | `host.hit(id)` | A window command for hit region `id`: `"quit"`, `"fullscreen:toggle"`, `"decorations:toggle"`, or `""` |
+| `host.key(code)` | `"handled"` when Ruby used the key (27 Esc, 38/40 Up/Down, 13 Enter, 8 Backspace), else `""` |
+| `host.text(str)` | Typed text (`/` opens search; while searching, it's the query) |
+
+A frame's `badge` is the number of sessions waiting on the person; Rust
+shows it on the Dock icon and bounces the icon when it goes up.
 
 Rust handles the drag region (the header) natively, draws the frame, and
 executes the window commands. Everything else, including the two-second

@@ -130,6 +130,7 @@ module BotOps
         name = File.basename(p["cwd"].to_s)
         color = project_color(name)
         box(10, y, w - 20, card_h, fill: col(PANEL2), stroke: col(color, 0.25), curve: 7)
+        @c.hit(10, y, w - 20, card_h) { open_overlay(project_overlay(p)) }
         square_icon(18, y + 11, color, name[0].to_s.upcase, 30)
         txt(clip(name, (w - 200) / 6.5), 58, y + 9, size: 10, color: TEXT, weight: :bold)
         txt(clip([p["branch"], p["host"]].compact.join(" · "), (w - 200) / 5.5), 58, y + 27, size: 9, color: MUTED)
@@ -146,6 +147,7 @@ module BotOps
     def draw_tools_body(w, h)
       tx = 14
       counts = @store.tool_counts
+      session_only_toggle(w)
       TOOL_TABS.each do |key, text|
         color = { all: TEAL, edits: YELLOW, shell: CYAN, errors: RED }[key]
         tw = tab(tx, 4, "#{text} (#{Store.count(counts[key])})", @store.tool_filter == key, color: color) { set_tool_filter(key) }
@@ -176,36 +178,65 @@ module BotOps
 
     # ---- Usage ---------------------------------------------------------
 
+    RANGE_STEP = { "12h" => 1, "24h" => 1, "7d" => 6, "30d" => 24 }.freeze
+    RANGE_LABEL = { "12h" => "Last 12 hours", "24h" => "Last 24 hours", "7d" => "Last 7 days", "30d" => "Last 30 days" }.freeze
+    # [legend key, colour, index in an hourly row]
+    SERIES = [["Tool calls", TEAL, 2], ["Output k-tok", BLUE, 1], ["Prompts", PURPLE, 3], ["Errors", RED, 4]].freeze
+
     def draw_usage_body(w, h)
       t = @store.totals
-      tiles = [["Prompts", t[:prompts], "›"], ["Tool calls", t[:tool_calls], "⚙"],
-               ["Output tokens", t[:out_tokens], "✦"], ["Tool errors", t[:errors], "!"]]
+      tiles = [["Prompts", t[:prompts], "›", :prompts], ["Tool calls", t[:tool_calls], "⚙", :tools],
+               ["Output tokens", t[:out_tokens], "✦", :tokens], ["Tool errors", t[:errors], "!", :tools]]
       bw = [(w - 32 - 3 * 24) / 4, 100].max
       gap = (w - 32 - tiles.size * bw) / (tiles.size - 1)
-      tiles.each_with_index do |(name, value, glyph), i|
+      tiles.each_with_index do |(name, value, glyph, view), i|
         x = 16 + i * (bw + gap)
         c = name == "Tool errors" && value.positive? ? RED : CYAN
         @c.rect(x, 6, bw, 56, curve: 8, fill: col(PANEL2), stroke: col(c, 0.55))
         square_icon(x + 8, 16, c, glyph, 26)
         txt(name, x + 42, 13, size: 9, color: c, weight: :bold)
         txt(Store.count(value), x + 42, 30, size: 13, color: TEXT, weight: :bold)
+        @c.hit(x, 6, bw, 56) { open_overlay(view_overlay(view)) }
       end
 
-      rows = @store.hourly(12)
-      labels = rows.map { |r| Time.at(r[0]).strftime("%H:00") }
-      series = [
-        { name: "Tool calls / h",  color: TEAL,   values: rows.map { |r| r[2] } },
-        { name: "Output k-tok / h", color: BLUE,  values: rows.map { |r| (r[1] / 1000.0).round(1) } },
-        { name: "Prompts / h",     color: PURPLE, values: rows.map { |r| r[3] } },
-        { name: "Errors / h",      color: RED,    values: rows.map { |r| r[4] } }
-      ]
-      peak = series.flat_map { |s| s[:values] }.max.to_f
-      max = nice_ceiling(peak)
+      range = @store.chart_range
+      step = RANGE_STEP[range]
+      buckets = @store.hourly(Store::CHART_RANGES[range]).each_slice(step).map do |slice|
+        [slice.first[0], *(1..4).map { |i| slice.sum { |r| r[i] } }]
+      end
+      unit = { 1 => "h", 6 => "6h", 24 => "day" }[step]
+      format = { 1 => "%H:00", 6 => "%a %H:00", 24 => "%b %-d" }[step]
+      series = SERIES.map do |key, color, idx|
+        values = buckets.map { |b| idx == 1 ? (b[1] / 1000.0).round(1) : b[idx] }
+        { key: key, name: "#{key} / #{unit}", color: color, values: values }
+      end
+      visible = series.reject { |sr| @store.hidden_series.include?(sr[:key]) }
+      max = nice_ceiling(visible.flat_map { |sr| sr[:values] }.max.to_f)
       chart_w = w - 130
-      shown = labels.each_with_index.map { |l, i| i.even? || i == labels.size - 1 ? l : "" }
-      line_chart(12, 76, chart_w, h - 84, shown, series, max: max)
-      txt("Last 12 hours, all machines", chart_w + 22, 76, size: 8, color: DIM, width: 110)
-      legend(chart_w + 22, 100, series)
+      every = [(buckets.size / 7.0).ceil, 1].max
+      labels = buckets.each_with_index.map { |b, i| i % every == 0 || i == buckets.size - 1 ? Time.at(b[0]).strftime(format) : "" }
+      line_chart(12, 76, chart_w, h - 84, labels, visible, max: max)
+
+      # A click on a column opens that period's breakdown.
+      gx = 38
+      gw = chart_w - 26
+      colw = gw / [buckets.size - 1, 1].max.to_f
+      buckets.each_with_index do |b, i|
+        @c.hit(gx + colw * i - colw / 2, 76, colw, h - 84 - 18) { open_overlay(period_overlay(b[0], step)) }
+      end
+
+      rx = chart_w + 22
+      txt("#{RANGE_LABEL[range]}, all machines", rx, 72, size: 8, color: DIM, width: 110)
+      Store::CHART_RANGES.keys.each_with_index do |key, i|
+        tab(rx + (i % 2) * 52, 88 + (i / 2) * 24, key, key == range, width: 46) { set_chart_range(key) }
+      end
+      series.each_with_index do |sr, i|
+        y = 146 + i * 22
+        hidden = @store.hidden_series.include?(sr[:key])
+        dot(rx, y + 3, col(sr[:color], hidden ? 0.25 : 1.0), 7)
+        txt(sr[:name], rx + 14, y - 2, size: 9, color: hidden ? DIM : TEXT)
+        @c.hit(rx - 4, y - 4, 112, 20) { toggle_series(sr[:key]) }
+      end
     end
 
     def nice_ceiling(v)
@@ -284,6 +315,7 @@ module BotOps
       txt(clip(Store.display_name(s), (w - 100) / 7), 72, 6, size: 11, color: TEXT, weight: :bold)
       status_pill(72, 25, status_label(s))
       link("Open in claude.ai ↗", 150, 24, size: 9, color: CYAN) { open_session_url(s["url"]) } if s["url"]
+      link("Timeline ›", w - 76, 8, size: 9, color: CYAN) { open_overlay(timeline_overlay(s)) }
       txt(clip([s["host"], entry_name(s), s["version"] && "v#{s['version']}"].compact.join(" · "), (w - 100) / 5.5),
           72, 38, size: 9, color: MUTED)
 
@@ -307,7 +339,7 @@ module BotOps
       tok = s["tokens"] || {}
       rows = [
         ["Branch",      clip(s["branch"] || "—", (w - cx - 70) / 5.5)],
-        ["Context",     s["context"] ? "#{Store.count(s['context'])} tok" : "—"],
+        ["Context",     context_text(s)],
         ["Output",      "#{Store.count(tok['out'])} tok"],
         ["Cache read",  "#{Store.count(tok['cache_read'])} tok"],
         ["Tools",       "#{s['tool_calls'].to_i} (#{s['errors'].to_i} err)"],
@@ -315,7 +347,11 @@ module BotOps
       ]
       rows.each_with_index do |(k, v), i|
         label(k, cx, 68 + i * 17, size: 9, color: MUTED)
-        txt(v, cx + 64, 68 + i * 17, size: 9, color: k == "Tools" && s["errors"].to_i.positive? ? YELLOW : TEXT)
+        color = if k == "Context" then context_color(s)
+                elsif k == "Tools" && s["errors"].to_i.positive? then YELLOW
+                else TEXT
+                end
+        txt(v, cx + 64, 68 + i * 17, size: 9, color: color)
       end
     end
 
@@ -324,7 +360,8 @@ module BotOps
     KIND_COLORS = { "prompt" => CYAN, "tool" => TEAL, "error" => RED, "attention" => YELLOW, "lifecycle" => MUTED }.freeze
 
     def draw_log_body(w, h)
-      list = @store.events
+      session_only_toggle(w)
+      list = @store.visible_events
       return empty_state("No events in the last 24 hours.") if list.empty?
       row_h = 19
       rows = [(h - 6) / row_h, list.size].min
@@ -356,6 +393,175 @@ module BotOps
         txt(m["online"] ? "online" : "offline", w - 70, y + 2, size: 8, color: c, width: 58, align: :right)
         @c.hit(4, y, w - 8, row_h) { open_overlay(machine_overlay(m)) }
       end
+    end
+
+    # "This session only", in the panel's title bar: narrows Tool Calls and
+    # the Event Log to the session selected in Claude Sessions.
+    def session_only_toggle(w)
+      on = @store.session_only
+      label = on ? "● this session only" : "○ this session only"
+      link(label, w - 128, -Layout::PANEL_TITLE_H + 12, size: 9, color: on ? CYAN : MUTED, width: 112) { toggle_session_only }
+    end
+
+    # ---- context meter -------------------------------------------------
+
+    # "52k / 1M · 5%": the session's context against its model's window.
+    def context_text(s)
+      return "—" unless s["context"]
+      window = Store.context_window(s["model"], s["context"])
+      "#{Store.count(s['context'])} / #{Store.count(window)} · #{(s['context'] * 100.0 / window).round}%"
+    end
+
+    def context_color(s)
+      return TEXT unless s["context"]
+      pct = s["context"].to_f / Store.context_window(s["model"], s["context"])
+      pct >= 0.95 ? RED : (pct >= 0.8 ? YELLOW : TEXT)
+    end
+
+    # ---- drill-down overlays --------------------------------------------
+
+    # Monospaced table: first column left-aligned, the rest right-aligned
+    # unless `left` names more left-aligned columns.
+    def table(headers, rows, left: [0])
+      cols = headers.size
+      widths = (0...cols).map { |i| ([headers[i]] + rows.map { |r| r[i] }).map { |c| c.to_s.length }.max }
+      fmt = ->(r) { (0...cols).map { |i| left.include?(i) ? r[i].to_s.ljust(widths[i]) : r[i].to_s.rjust(widths[i]) }.join("   ").rstrip }
+      ([fmt.(headers), widths.map { |wd| "─" * wd }.join("   ")] + rows.map(&fmt)).join("\n")
+    end
+
+    def view_overlay(view)
+      case view
+      when :tokens then tokens_overlay
+      when :tools then tools_overlay
+      when :prompts then prompts_overlay
+      else sessions_overlay
+      end
+    end
+
+    def pct(part, whole)
+      whole.to_f.positive? ? "#{(part * 100.0 / whole).round(1)}%" : "—"
+    end
+
+    def tokens_overlay(hours = 24)
+      tb = @store.token_breakdown(hours)
+      t = tb[:totals]
+      o = Overlay.new("Output tokens", subtitle: "Last #{hours} hours, every machine")
+      o.field("Output", Store.count(t["out"]))
+      o.field("Input", Store.count(t["in"]))
+      o.field("Cache read", Store.count(t["cache_read"]))
+      o.field("Cache write", Store.count(t["cache_write"]))
+      o.field("Cache hit", tb[:cache_hit] && "#{(tb[:cache_hit] * 100).round(1)}% of prompt tokens were read from cache")
+      kinds = ->(x) { [Store.count(x["out"]), Store.count(x["in"]), Store.count(x["cache_read"]), Store.count(x["cache_write"])] }
+      head = %w[output input cache\ read cache\ write]
+      o.block("By model", table(["model", *head], tb[:by_model].sort_by { |_, x| -x["out"] }.map { |m, x| [Store.model_name(m), *kinds.(x)] }))
+      o.block("By project", table(["project", *head], tb[:by_project].sort_by { |_, x| -x["out"] }.map { |pr, x| [pr, *kinds.(x)] }))
+      o.block("By hour", table(["hour", *head], tb[:by_hour].sort_by(&:first).reverse.map { |hr, x| [Time.at(hr).strftime("%a %H:00"), *kinds.(x)] }))
+      o.block("By session (whole session so far)", table(["session", *head], tb[:by_session].first(30).map { |n, x| [n.to_s[0, 60], *kinds.(x)] }))
+      o.note("Cloud sessions report no token counts (Claude Code's hooks don't receive usage), so they're not included here.")
+      o
+    end
+
+    def tools_overlay
+      stats = @store.tool_stats
+      secs = ->(v) { v ? (v < 10 ? format("%.2fs", v) : Store.duration(v).sub(/\A0m\z/, "#{v.round}s")) : "—" }
+      o = Overlay.new("Tool calls", subtitle: "Every tool call in the last 24 hours (newest #{Probe::EVENT_LIMIT} per machine)")
+      o.field("Calls", stats.sum { |x| x[:calls] })
+      o.field("Errors", stats.sum { |x| x[:errors] })
+      rows = stats.map do |x|
+        [x[:tool], x[:calls], x[:errors], pct(x[:errors], x[:calls]), secs.(x[:median]), secs.(x[:max]) + (x[:waits] ? "  (waits on you)" : "")]
+      end
+      o.block("By tool", table(%w[tool calls errors error\ rate median slowest], rows, left: [0, 5]))
+      slow = @store.slowest_tools(15).map { |e| [Time.at(e["at"]).strftime("%H:%M:%S"), e["title"], secs.(e["duration"]), e["session"].to_s[0, 40], e["detail"].to_s] }
+      o.block("Slowest calls", table(%w[time tool took session detail], slow, left: [0, 1, 3, 4])) unless slow.empty?
+      o.note("Durations run from the call to its result. Tools that wait for you (AskUserQuestion, ExitPlanMode) are left out of the slowest list. Cloud sessions report calls without durations.")
+      o
+    end
+
+    def prompts_overlay
+      by = @store.prompts_by_project
+      o = Overlay.new("Prompts", subtitle: "Last 24 hours, every machine")
+      o.field("Prompts", @store.prompts.size)
+      o.block("By project", table(%w[project prompts], by.map { |pr, list| [pr.empty? ? "(unknown)" : pr, list.size] }))
+      recent = @store.prompts.first(40).map { |e| "#{Time.at(e['at']).strftime('%a %H:%M')}  #{e['session'].to_s[0, 30].ljust(30)}  #{e['detail']}" }
+      o.block("Most recent", recent.join("\n"))
+      o.note("Click a prompt in Recent Prompts for its full text.")
+      o
+    end
+
+    def sessions_overlay
+      list = @store.all_sessions
+      o = Overlay.new("Claude sessions", subtitle: "#{@store.sessions.size} live, #{@store.busy_count} busy, #{@store.recent_sessions.size} earlier")
+      rows = list.map do |s|
+        [status_label(s), Store.display_name(s).to_s[0, 50], project_of(s), entry_name(s), Store.model_name(s["model"]),
+         s["tool_calls"].to_i, Store.ago(Store.worked_at(s))]
+      end
+      o.block("Sessions (most recently worked on first)", table(%w[status session project client model tools last\ worked], rows, left: [0, 1, 2, 3, 4]))
+      o
+    end
+
+    # Everything one session did, in order, with the context after each prompt.
+    def timeline_overlay(s)
+      evs = @store.events.select { |e| e["sid"] == s["id"] }.sort_by { |e| e["at"].to_f }
+      o = Overlay.new(Store.display_name(s), subtitle: [project_of(s), entry_name(s), s["host"]].compact.join("  ·  "))
+      o.field("Status", status_label(s))
+      o.field("Model", Store.model_name(s["model"]))
+      o.field("Started", s["started_at"] && Time.at(s["started_at"]).strftime("%a %b %-d, %H:%M"))
+      o.field("Context", context_text(s))
+      o.field("Tools", "#{s['tool_calls'].to_i} (#{s['errors'].to_i} errors)")
+      lines = evs.map do |e|
+        time = Time.at(e["at"].to_f).strftime("%H:%M:%S")
+        case e["kind"]
+        when "prompt" then "#{time}  ›  #{e['detail']}#{e['context'] ? "   [context #{Store.count(e['context'])}]" : ''}"
+        when "tool" then "#{time}      #{e['title']}#{e['duration'] ? " #{format('%.1fs', e['duration'])}" : ''}#{e['failed'] ? ' FAILED' : ''}  #{e['detail']}"
+        when "error" then "#{time}      ! #{e['tool'] || 'tool'} error: #{e['detail']}"
+        else "#{time}  ·  #{e['title']} #{e['detail']}".rstrip
+        end
+      end
+      o.block("Timeline (oldest first)", lines.empty? ? "No events in the last 24 hours." : lines.join("\n"))
+      o.note("Events are kept for 24 hours, the newest #{Probe::EVENT_LIMIT} per machine, so a long session's start may be missing.") if lines.size > 50
+      o
+    end
+
+    EDIT_TOOLS = %w[Edit Write MultiEdit NotebookEdit].freeze
+
+    def project_overlay(p)
+      name = File.basename(p["cwd"].to_s)
+      sessions = @store.all_sessions.select { |s| File.basename(s["cwd"].to_s) == name }
+      o = Overlay.new(name, subtitle: [p["cwd"], p["host"]].compact.join("  ·  "))
+      o.field("Prompts (24h)", p["prompts"].to_i)
+      o.field("Tool calls (24h)", p["tool_calls"].to_i)
+      o.field("Output (24h)", "#{Store.count(p['out_tokens'])} tokens")
+      o.field("Branches", sessions.map { |s| s["branch"] }.compact.uniq.join(", "))
+      by_model = Hash.new(0)
+      @store.usage(24).each { |_, _, pr, model, out| by_model[model] += out if pr == name }
+      o.block("Output by model (24h)", table(%w[model output], by_model.reject { |_, v| v.zero? }.sort_by { |_, v| -v }.map { |m, v| [Store.model_name(m), Store.count(v)] }))
+      o.block("Sessions", table(%w[status session client tools last\ worked], sessions.map { |s| [status_label(s), Store.display_name(s).to_s[0, 50], entry_name(s), s["tool_calls"].to_i, Store.ago(Store.worked_at(s))] }, left: [0, 1, 2]))
+      files = @store.tool_events.select { |e| e["project"] == name && EDIT_TOOLS.include?(e["title"]) }.map { |e| e["detail"].to_s }.reject(&:empty?).tally
+      o.block("Files edited most (24h)", table(%w[file edits], files.sort_by { |_, n| -n }.first(20).map { |f, n| [f, n] })) unless files.empty?
+      o
+    end
+
+    # One chart column: `step` hours from `start`.
+    def period_overlay(start, step)
+      stop = start + step * 3600
+      rows = @store.usage([((Store.current_hour - start) / 3600) + 1, 1].max).select { |r| r[1] >= start && r[1] < stop }
+      sum = ->(i) { rows.sum { |r| r[i].to_i } }
+      fmt = step == 24 ? "%a %b %-d" : "%a %b %-d, %H:00"
+      o = Overlay.new("Usage #{Time.at(start).strftime(fmt)}#{step > 1 ? " – #{Time.at(stop).strftime(step == 24 ? '%a %b %-d' : '%H:00')}" : ''}",
+                      subtitle: "Every machine")
+      o.field("Prompts", sum.(9))
+      o.field("Tool calls", sum.(8))
+      o.field("Errors", sum.(10))
+      o.field("Output tokens", Store.count(sum.(4)))
+      by_project = rows.group_by { |r| r[2].empty? ? "(cloud)" : r[2] }.map { |pr, rs| [pr, rs.sum { |r| r[9] }, rs.sum { |r| r[8] }, Store.count(rs.sum { |r| r[4] })] }
+      o.block("By project", table(%w[project prompts tools output], by_project.sort_by { |r| -r[2] }))
+      evs = @store.events.select { |e| e["at"].to_f >= start && e["at"].to_f < stop }.sort_by { |e| e["at"].to_f }
+      if evs.empty?
+        o.note("Individual events are kept for 24 hours; this period's totals come from the usage history.") if stop < Time.now.to_i - 24 * 3600
+      else
+        o.block("Events", evs.map { |e| "#{Time.at(e['at'].to_f).strftime('%H:%M:%S')}  #{e['kind'].ljust(9)} #{e['session'].to_s[0, 30].ljust(30)}  #{e['kind'] == 'tool' ? "#{e['title']}: " : ''}#{e['detail']}" }.join("\n"))
+      end
+      o
     end
 
     # ---- detail overlays ----------------------------------------------
@@ -444,7 +650,16 @@ module BotOps
       link("[ Quit ]", 460, y, color: RED) { @host.quit }
       txt("Drag the header bar to move the window. Esc leaves fullscreen; F11 or Ctrl+Cmd+F toggles it.",
           16, y + 28, size: 9, color: DIM, width: w - 32)
-      y += 64
+      ny = y + 54
+      txt("Alerts", 16, ny, size: 9, color: MUTED)
+      txt("Dock badge and bounce when a session waits on you: always on.", 150, ny, size: 9, color: TEXT)
+      on = @store.notifications?
+      link(on ? "[ macOS notifications: on ]" : "[ macOS notifications: off ]", 150, ny + 18, color: on ? CYAN : MUTED) do
+        @store.notifications = !on
+        @host.invalidate
+      end
+      txt("(a script-posted notification opens Script Editor when clicked)", 330, ny + 18, size: 8, color: DIM)
+      y += 64 + 50
       txt("Add another machine", 16, y, size: 9, color: MUTED)
       txt("1. Here: start the dashboard with BOT_OPS_LISTEN=0.0.0.0:47800 and a BOT_OPS_TOKEN of 16+ characters.",
           150, y, size: 9, color: TEXT, width: w - 170)

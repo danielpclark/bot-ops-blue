@@ -2,6 +2,9 @@
 
 require "minitest/autorun"
 require "json"
+require "tmpdir"
+# Keep history.json and prefs.json out of the real ~/.config.
+ENV["BOT_OPS_CONFIG_DIR"] = Dir.mktmpdir("bot-ops-test")
 require "bot_ops"
 
 # A snapshot shaped like Probe#snapshot, for tests that need a populated store.
@@ -31,6 +34,8 @@ module Fixtures
         { "at" => now - 90, "sid" => "s-busy", "project" => "api", "kind" => "prompt", "title" => "prompt", "detail" => "fix the flaky login test" }
       ],
       "hourly" => [[hour - 3600, 1200, 5, 1, 0], [hour, 3000, 9, 2, 1]],
+      "usage" => [[hour - 3600, "api", "claude-opus-5-5", 1200, 5, 40_000, 1000, 5, 1, 0],
+                  [hour, "api", "claude-opus-5-5", 3000, 5, 50_000, 2000, 9, 2, 1]],
       "projects" => [{ "cwd" => "/src/api", "out_tokens" => 4200, "tool_calls" => 14, "prompts" => 3, "sessions" => 1,
                        "last_at" => now - 5, "branch" => "main" }]
     }
