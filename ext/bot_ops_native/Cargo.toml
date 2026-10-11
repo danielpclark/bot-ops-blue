@@ -18,3 +18,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 [profile.release]
 opt-level = 2
 strip = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+raw-window-handle = "0.6"
+objc2-foundation = { version = "0.2", features = ["NSArray", "NSThread", "NSGeometry"] }
+objc2-app-kit = { version = "0.2", features = ["NSResponder", "NSView", "NSWindow", "NSScreen"] }

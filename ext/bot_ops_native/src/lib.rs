@@ -200,6 +200,32 @@ fn image_circle_mesh(tex: egui::TextureId, c: Pos2, r: f32) -> egui::Shape {
     egui::Shape::mesh(mesh)
 }
 
+// ---- window placement --------------------------------------------------------
+
+/// Moves the (still invisible) window so its top-left corner is at `left,
+/// top`: global screen points, origin at the primary screen's top-left.
+///
+/// Done through AppKit rather than ViewportBuilder::with_position: egui-winit
+/// 0.29 multiplies that position by its pixels_per_point (1.0 before the
+/// window exists) and hands it to winit as *physical* pixels, which winit then
+/// divides by the main screen's Retina factor, so the window first appeared at
+/// half the coordinates, straddling the MacBook's screen and the external one.
+#[cfg(target_os = "macos")]
+fn place_window(cc: &eframe::CreationContext<'_>, left: f64, top: f64) {
+    use objc2_app_kit::{NSScreen, NSView};
+    use objc2_foundation::{MainThreadMarker, NSPoint};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let Ok(handle) = cc.window_handle() else { return };
+    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else { return };
+    let view: &NSView = unsafe { appkit.ns_view.cast().as_ref() };
+    let Some(window) = view.window() else { return };
+    // AppKit's origin is the primary screen's bottom-left, with y going up.
+    let Some(primary) = (unsafe { NSScreen::screens(mtm).firstObject() }) else { return };
+    let primary_height = primary.frame().size.height;
+    window.setFrameTopLeftPoint(NSPoint::new(left, primary_height - top));
+}
+
 // ---- app -------------------------------------------------------------------
 
 fn is_fullscreen(ctx: &egui::Context) -> bool {
@@ -552,6 +578,9 @@ rutie::methods!(
             .with_decorations(false)
             .with_resizable(false)
             .with_inner_size([w, h]);
+        // On macOS the window is placed through AppKit before it is first
+        // shown (see place_window); elsewhere egui positions it.
+        #[cfg(not(target_os = "macos"))]
         if let Some((x, y)) = position {
             viewport = viewport.with_position([x, y]);
         }
@@ -585,6 +614,10 @@ rutie::methods!(
                     Box::new(move |cc| {
                         if let Ok(mut slot) = ctx_for_loop.lock() {
                             *slot = Some(cc.egui_ctx.clone());
+                        }
+                        #[cfg(target_os = "macos")]
+                        if let Some((x, y)) = position {
+                            place_window(cc, x as f64, y as f64);
                         }
                         install_fonts(&cc.egui_ctx);
                         // Zoom is driven by fit_to_window; Cmd +/- would fight it.

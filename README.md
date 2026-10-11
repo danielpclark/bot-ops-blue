@@ -52,10 +52,8 @@ To choose a different spot, set an environment variable:
 BOT_OPS_DISPLAY=main bundle exec rake run
 ```
 
-`BOT_OPS_FULLSCREEN=1` starts fullscreen on that monitor. Fullscreen is
-macOS's own (its own Space); while it switches in or out, macOS can briefly
-show a small helper window on the main screen. To avoid that, start
-windowed and switch only when you want to.
+`BOT_OPS_FULLSCREEN=1` starts fullscreen on that monitor (macOS's own
+fullscreen, in its own Space).
 
 The window opens without an OS title bar. Drag the header bar to move it.
 The three buttons at the right of the header minimize (leaving fullscreen
