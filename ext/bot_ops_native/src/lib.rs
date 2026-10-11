@@ -563,14 +563,15 @@ rutie::methods!(
         // Run the window loop without the GVL: holding it here would starve
         // every Ruby thread for as long as the window is open.
         let mut once = Some((options, host));
-        // Ruby can't interrupt native code by itself: when it wants this
-        // thread back (SIGTERM, Ctrl+C, Thread#kill), its unblock function
-        // closes the window, which ends the loop.
+        // Ruby calls the unblock function whenever it wants this thread back
+        // to handle an interrupt: a TERM or Ctrl+C, but also routine ones such
+        // as SIGCHLD from the probe's sysctl/df runs, many times a minute.
+        // So it only wakes the loop: the next frame calls into Ruby, which
+        // handles the interrupt there (a TERM comes back as "quit" from poll).
         let window_ctx: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
         let ctx_for_loop = Arc::clone(&window_ctx);
         let unblock = move || {
             if let Some(ctx) = window_ctx.lock().ok().and_then(|c| c.clone()) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 ctx.request_repaint();
             }
         };
