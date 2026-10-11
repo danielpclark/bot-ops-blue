@@ -101,7 +101,7 @@ module BotOps
       stats.each_with_index do |s, i|
         x = x0 + 14 + slot * i
         tile = 28
-        @c.glow(x, 19, tile, tile, curve: 8, blur: 10, color: col(BOLT, 0.35))
+        @c.glow(x, 19, tile, tile, curve: 8, blur: 6, color: col(BOLT, 0.12))
         grad_rect(x, 19, tile, tile, col("#2D7BFF", 0.9), col("#1640B8", 0.9), curve: 8)
         icon(STAT_ICONS[i], x + tile / 2.0, 19 + tile / 2.0, 16, col("#FFFFFF"))
         tx = x + tile + 9

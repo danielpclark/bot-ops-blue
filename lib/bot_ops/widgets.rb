@@ -301,7 +301,7 @@ module BotOps
     # The same as a rounded tile.
     def square_icon(x, y, color_hex, glyph, d = 28)
       curve = d * 0.24
-      @c.glow(x, y, d, d, curve: curve, blur: d * 0.35, color: col(color_hex, 0.32))
+      @c.glow(x, y, d, d, curve: curve, blur: d * 0.18, color: col(color_hex, 0.12))
       @c.gradient(Canvas.rounded_rect(x, y, d, d, curve), x, y, x + d, y + d,
                   from: col(tint(color_hex, 0.18)), to: col(shade(color_hex, 0.38)))
       @c.rect(x, y, d, d, curve: curve, stroke: col(tint(color_hex, 0.45), 0.4))

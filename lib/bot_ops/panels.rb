@@ -137,7 +137,7 @@ module BotOps
         color = project_color(name)
         card(10, y, w - 20, card_h, accent: color)
         # The project's colour bar, inside the card and inset from its edges.
-        @c.glow(16, y + 9, 4, card_h - 18, curve: 2, blur: 8, color: col(color, 0.6))
+        @c.glow(16, y + 9, 4, card_h - 18, curve: 2, blur: 5, color: col(color, 0.25))
         grad_rect(16, y + 9, 4, card_h - 18, col(tint(color, 0.2)), col(shade(color, 0.2)), curve: 2)
         square_icon(30, y + 12, color, name[0].to_s.upcase, 38)
         right_w = 150
@@ -214,7 +214,7 @@ module BotOps
       tiles.each_with_index do |(name, value, glyph, view), i|
         x = 16 + i * (bw + gap)
         c = name == "Tool errors" && value.positive? ? RED : (name == "Tool errors" ? SLATE : CYAN)
-        @c.glow(x, 8, bw, 56, curve: 10, blur: 12, color: col(c, 0.22))
+        @c.glow(x, 8, bw, 56, curve: 10, blur: 10, color: col(c, 0.10))
         grad_rect(x, 8, bw, 56, col(CARD_TOP, 0.9), col(PANEL2, 0.9), curve: 10)
         @c.rect(x, 8, bw, 56, curve: 10, stroke: col(c, 0.6))
         fade_line(x + 10, x + bw - 10, 8.5, c, alpha: 0.6, peak: 0.3)
