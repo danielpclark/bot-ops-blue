@@ -263,6 +263,7 @@ module BotOps
     # A line icon from ICONS (Lucide's 24-unit box), `size` wide, centred
     # on (cx, cy). Brand marks are outlines, so they get a finer line.
     def icon(name, cx, cy, size, color, width: nil)
+      return cloud_symbol(cx, cy, size, color) if name.to_s == "cloud" && width.nil?
       lines = ICONS[name.to_s] or return
       k = size / 24.0
       sw = width || [(name.to_s == "vscode" ? 1.25 : 2.0) * k, 1.0].max
@@ -274,10 +275,50 @@ module BotOps
       end
     end
 
+    # The cloud, as the designer drew it, `size` wide and centred on
+    # (cx, cy). On a disc or tile it's a clean outline; standing alone
+    # (lit: true) it glows, with a dark inside and a stroke that's lighter
+    # along the top, as if lit from above.
+    def cloud_symbol(cx, cy, size, color, lit: false)
+      k = size / 24.0
+      all = ICONS["cloud"][0][1].each_slice(2).to_a
+      # Small clouds use fewer points (about one per 1.5pt of outline):
+      # thick strokes along many tiny segments fray.
+      step = [(all.size * 1.5 / (size * 2.6)).floor, 1].max
+      pts = all.each_slice(step).map(&:first).map { |px, py| [cx + (px - 12) * k, cy + (py - 12) * k] }
+      # The drawing's line is about 1/27 of the cloud's width; small clouds
+      # keep at least a pixel and a half so they stay crisp.
+      sw = [0.75 * k, lit ? 1.5 : 1.35].max
+      unless lit
+        @c.polyline(pts, stroke: color, strokewidth: sw, closed: true, round: true)
+        return
+      end
+      hex = format("#%02X%02X%02X", *color[0, 3])
+      center = [cx + (CLOUD_ORIGIN[0] - 12) * k, cy + (CLOUD_ORIGIN[1] - 12) * k]
+      top = pts.map(&:last).min
+      bottom = pts.map(&:last).max
+      @c.polyline(pts, stroke: col(hex, 0.08), strokewidth: sw * 3 + 3, closed: true)
+      @c.polyline(pts, stroke: col(hex, 0.16), strokewidth: sw * 2 + 1, closed: true)
+      @c.gradient(pts, cx, top, cx, bottom, from: col(shade(hex, 0.6), 0.95), to: col(shade(hex, 0.82), 0.95), center: center)
+      @c.polyline(pts, stroke: col(hex), strokewidth: sw, closed: true, round: true)
+      # The top catches the light: three overlapping passes, each reaching
+      # less far down, so the highlight fades out instead of stopping.
+      [0.55, 0.42, 0.3].each do |reach|
+        cut = top + (bottom - top) * reach
+        idx = pts.each_index.select { |i| pts[i][1] < cut }
+        idx.slice_when { |a, b| b != a + 1 }.each do |run|
+          next if run.size < 2
+          @c.polyline(run.map { |i| pts[i] }, stroke: col(tint(hex, 0.6), 0.33), strokewidth: sw * 0.7)
+        end
+      end
+    end
+
     # What goes on a disc or tile: an ICONS name, :cloud, or a letter.
     def icon_glyph(glyph, x, y, d, color)
       name = glyph == :cloud ? "cloud" : glyph.to_s
-      if ICONS.key?(name)
+      if name == "cloud"
+        cloud_symbol(x + d / 2.0, y + d / 2.0, d * 0.56, color)
+      elsif ICONS.key?(name)
         icon(name, x + d / 2.0, y + d / 2.0, d * 0.5, color)
       else
         size = d * 0.46

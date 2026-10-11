@@ -202,10 +202,13 @@ fn points(v: &Value, i: usize) -> Vec<Pos2> {
         .unwrap_or_default()
 }
 
-/// A convex polygon filled with a linear gradient from `ca` at `from` to
-/// `cb` at `to`. Vertex colours are exact for a linear gradient; a ring of
-/// transparent vertices `feather` points outside the edge anti-aliases it.
-fn gradient_mesh(pts: &[Pos2], from: Pos2, to: Pos2, ca: [f32; 4], cb: [f32; 4], feather: f32) -> egui::Shape {
+/// A polygon filled with a linear gradient from `ca` at `from` to `cb` at
+/// `to`, as a fan from `center` (its centroid unless given): convex, or at
+/// least star-shaped around the centre. Vertex colours are exact for a
+/// linear gradient; a ring of transparent vertices `feather` points outside
+/// the edge anti-aliases it.
+fn gradient_mesh(pts: &[Pos2], from: Pos2, to: Pos2, ca: [f32; 4], cb: [f32; 4], feather: f32,
+                 center: Option<Pos2>) -> egui::Shape {
     let mut mesh = egui::Mesh::default();
     let n = pts.len();
     if n < 3 {
@@ -223,7 +226,7 @@ fn gradient_mesh(pts: &[Pos2], from: Pos2, to: Pos2, ca: [f32; 4], cb: [f32; 4],
     let sign = if area > 0.0 { 1.0 } else { -1.0 };
     let edge_normal = |a: Pos2, b: Pos2| { let d = (b - a).normalized(); Vec2::new(d.y, -d.x) * sign };
     let centroid = pts.iter().fold(Vec2::ZERO, |acc, p| acc + p.to_vec2()) / n as f32;
-    let c = centroid.to_pos2();
+    let c = center.unwrap_or(centroid.to_pos2());
     mesh.colored_vertex(c, at(c));
     for p in pts {
         mesh.colored_vertex(*p, at(*p));
@@ -749,13 +752,14 @@ impl HubApp {
                     }
                 }
                 "g" => {
-                    // ["g", pts (convex), [x1, y1, x2, y2], color_a, color_b]
+                    // ["g", pts (convex), [x1, y1, x2, y2], color_a, color_b, [cx, cy]?]
                     let pts = points(cmd, 1);
                     let axis = cmd.get(2).cloned().unwrap_or_default();
+                    let center = cmd.get(5).filter(|c| c.is_array()).map(|c| Pos2::new(num(c, 0), num(c, 1)));
                     if let (Some(ca), Some(cb)) = (color_parts(cmd, 3), color_parts(cmd, 4)) {
                         let feather = 0.5 / painter.ctx().pixels_per_point().max(0.5) * 2.0;
                         painter.add(gradient_mesh(&pts, Pos2::new(num(&axis, 0), num(&axis, 1)),
-                                                  Pos2::new(num(&axis, 2), num(&axis, 3)), ca, cb, feather));
+                                                  Pos2::new(num(&axis, 2), num(&axis, 3)), ca, cb, feather, center));
                     }
                 }
                 "s" => {

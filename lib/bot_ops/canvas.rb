@@ -72,10 +72,13 @@ module BotOps
     end
 
     # A convex polygon filled with a linear gradient, `from` colour at
-    # (x1, y1) to `to` at (x2, y2).
-    def gradient(points, x1, y1, x2, y2, from:, to:)
+    # (x1, y1) to `to` at (x2, y2). A polygon that isn't convex but is
+    # star-shaped around some point can be filled by passing it as `center`.
+    def gradient(points, x1, y1, x2, y2, from:, to:, center: nil)
       pts = points.map { |(x, y)| [(@ox + x).round(2), (@oy + y).round(2)] }
-      @cmds << Cmd.new(:gradient, [pts, [@ox + x1, @oy + y1, @ox + x2, @oy + y2], from, to])
+      args = [pts, [@ox + x1, @oy + y1, @ox + x2, @oy + y2], from, to]
+      args << [(@ox + center[0]).round(2), (@oy + center[1]).round(2)] if center
+      @cmds << Cmd.new(:gradient, args)
     end
 
     # A soft glow around a rounded rectangle (blur: how far it fades out).

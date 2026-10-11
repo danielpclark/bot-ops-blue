@@ -82,7 +82,7 @@ module BotOps
       txt(status, dx + 1150, 25, size: 12, color: c, weight: :semibold)
       txt(clock_text, dx + 1150, 47, size: 11, color: TEXT)
       fade_vline(dx + 1312, 16, hh - 16, CYAN, alpha: 0.45)
-      icon("cloud", dx + 1338, 37, 22, col(CYAN))
+      cloud_symbol(dx + 1336, 37, 26, col("#4DA8FF"), lit: true)
       status = @store.collector_status.to_s
       first, rest = status.start_with?("Collecting on ") ? ["Collecting on", status.delete_prefix("Collecting on ")] : [status, nil]
       txt(fit_text(first, 150, 10.5), dx + 1358, 25, size: 10.5, color: MUTED)
