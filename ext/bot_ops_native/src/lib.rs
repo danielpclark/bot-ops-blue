@@ -36,6 +36,9 @@ struct Frame {
     drag: Option<(f32, f32, f32, f32)>,
     #[serde(default)]
     resize: Option<(f32, f32, f32, f32)>,
+    /// Where a drag pans the content (an open overlay's body).
+    #[serde(default)]
+    pan: Option<(f32, f32, f32, f32)>,
 }
 
 struct HubApp {
@@ -63,6 +66,10 @@ struct HubApp {
     poll_failures: u32,
     /// Scrolling not yet sent to Ruby, in lines.
     scroll_lines: f32,
+    /// Sideways scrolling not yet sent to Ruby, in points.
+    scroll_x: f32,
+    /// While dragging an overlay's body: the pointer position last sent.
+    panning: Option<Pos2>,
     /// Monospace advance last reported to Ruby (thousandths of a point).
     mono_advance: Option<i64>,
     /// While the grip is held: window size minus pointer, in unzoomed points.
@@ -312,6 +319,12 @@ impl HubApp {
     }
 
     fn handle_press(&mut self, ctx: &egui::Context, pos: Pos2) {
+        if let Some((x, y, w, h)) = self.frame.pan {
+            if Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h)).contains(pos) {
+                self.panning = Some(pos);
+                return;
+            }
+        }
         let hit = self.hits_rects.iter().rev().find(|(r, _)| r.contains(pos)).map(|(_, id)| *id);
         if let Some(id) = hit {
             match self.call_host("hit", &[id as i64]) {
@@ -401,10 +414,42 @@ impl HubApp {
         }
     }
 
+    // Dragging inside an overlay's body moves its text with the pointer
+    // (sideways for long lines, and up and down), sent in whole points.
+    fn handle_pan(&mut self, ctx: &egui::Context) {
+        let Some(last) = self.panning else { return };
+        if !ctx.input(|i| i.pointer.primary_down()) {
+            self.panning = None;
+            return;
+        }
+        let Some(now) = ctx.input(|i| i.pointer.latest_pos()) else { return };
+        let moved = now - last;
+        let (dx, dy) = (moved.x.round(), moved.y.round());
+        if dx != 0.0 || dy != 0.0 {
+            self.panning = Some(last + Vec2::new(dx, dy));
+            if self.call_host("pan", &[-dx as i64, -dy as i64]).is_err() {
+                eprintln!("bot_ops_native: Ruby raised in pan");
+            }
+        }
+    }
+
     // Mouse wheel and trackpad scrolling, sent to Ruby in whole lines (it
     // scrolls an open detail overlay). egui's y is positive when scrolling up.
     fn handle_scroll(&mut self, ctx: &egui::Context) {
-        let dy = ctx.input(|i| i.raw_scroll_delta.y);
+        let (mut dx, mut dy, shift) = ctx.input(|i| (i.raw_scroll_delta.x, i.raw_scroll_delta.y, i.modifiers.shift));
+        if shift && dx == 0.0 {
+            (dx, dy) = (dy, 0.0); // Shift + wheel scrolls sideways
+        }
+        if dx != 0.0 {
+            self.scroll_x += -dx;
+            let points = self.scroll_x.trunc();
+            if points != 0.0 {
+                self.scroll_x -= points;
+                if self.call_host("pan", &[points as i64, 0]).is_err() {
+                    eprintln!("bot_ops_native: Ruby raised in pan");
+                }
+            }
+        }
         if dy == 0.0 {
             return;
         }
@@ -610,6 +655,7 @@ impl eframe::App for HubApp {
         self.report_mono_advance(ctx);
         self.handle_keys(ctx);
         self.handle_scroll(ctx);
+        self.handle_pan(ctx);
         self.handle_resize(ctx);
         self.poll_ruby(ctx);
 
@@ -755,6 +801,8 @@ rutie::methods!(
                             minimize_at: None,
                             poll_failures: 0,
                             scroll_lines: 0.0,
+                            scroll_x: 0.0,
+                            panning: None,
                             mono_advance: None,
                             resizing: None,
                         }))

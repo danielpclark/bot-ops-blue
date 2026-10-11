@@ -93,24 +93,58 @@ class OverlayTest < Minitest::Test
     assert_equal [[:field, "a", "b", 3]], o.field("a", "b").lines(40)
   end
 
-  # Text wraps from the character width the native side measures, and the
-  # body is clipped to the frame either way.
-  def test_wrapping_follows_the_measured_font_width_and_text_is_clipped_to_the_box
-    @scene.open_overlay(BotOps::Overlay.new("t").block("Input", "y" * 400))
-    widest = ->(c) { c.cmds.select { |x| x.op == :text && x.a[0].start_with?("y") }.map { |x| x.a[0].length }.max }
-    nominal = widest.(@scene.build)
-    @scene.mono_char = 6.6 # pixel rounding made characters wider at this zoom
-    wider = widest.(@scene.build)
-    assert_operator wider, :<, nominal, "fewer columns when characters are wider"
-    bx, _, bw, = overlay_box
-    assert_operator 24 + wider * 6.6, :<=, bw - 38, "the widest line fits inside the clip"
+  # Code keeps its line breaks and indentation: never wrapped, so it pans
+  # sideways instead, and stays clipped to the frame.
+  CODE = "if true\n  echo #{'x' * 300} \\\n       --continued\nend"
+
+  def test_code_is_never_wrapped_or_split
+    lines = BotOps::Overlay.new("t").field("When", "now").block("Input", CODE).lines
+    mono = lines.select { |l| l[0] == :mono }.map(&:last)
+    assert_equal CODE.split("\n"), mono, "every line exactly as written, indentation included"
+    assert_equal [:field, "When", "now", 6], lines.first
+  end
+
+  def test_only_notes_wrap_and_only_between_words
+    lines = BotOps::Overlay.new("t").note("alpha beta gamma delta epsilon zeta eta theta iota kappa").lines(22).map(&:last)
+    assert_equal ["alpha beta gamma delta", "epsilon zeta eta theta", "iota kappa"], lines
+  end
+
+  def test_long_lines_pan_sideways_within_the_frame
+    @scene.open_overlay(BotOps::Overlay.new("t").block("Input", CODE))
+    c = @scene.build
+    assert(c.texts.any? { |t| t.include?("drag or swipe sideways") }, "says it can pan")
+    line = ->(canvas) { canvas.cmds.find { |x| x.op == :text && x.a[0].start_with?("  echo xxx") } }
+    x0 = line.(c).a[1]
+    assert @scene.pan(120, 0)
+    assert_in_delta x0 - 120, line.(@scene.build).a[1], 0.01, "the text moved left"
+    @scene.pan(100_000, 0)
+    @scene.build
+    max = @store.overlay.x_offset
+    assert_operator max, :<, 100_000, "stops at the right end"
+    @scene.pan(-100_000, 0)
+    @scene.build
+    assert_equal 0, @store.overlay.x_offset
     ops = @scene.build.cmds.map(&:op)
     assert_equal ops.count(:clip), ops.count(:unclip)
     assert_operator ops.count(:clip), :>=, 2, "title and body are clipped"
   end
 
-  def test_long_lines_wrap_to_the_box
-    lines = BotOps::Overlay.new("t").block("Input", "x" * 95).lines(40)
-    assert_equal [[:heading, "Input"], [:mono, "x" * 40], [:mono, "x" * 40], [:mono, "x" * 15]], lines
+  def test_short_content_has_nothing_to_pan
+    @scene.open_overlay(BotOps::Overlay.new("t").block("Input", "ls -la"))
+    refute(@scene.build.texts.any? { |t| t.include?("sideways") })
+    @scene.pan(50, 0)
+    @scene.build
+    assert_equal 0, @store.overlay.x_offset
+  end
+
+  def test_drags_in_the_body_reach_ruby_as_pans
+    host = BotOps::NativeHost.new(channel: BotOps::Comms::Channel.new)
+    assert_nil JSON.parse(host.poll)["pan"], "no overlay, nothing to pan"
+    host.scene.open_overlay(BotOps::Overlay.new("t").block("Input", CODE))
+    region = JSON.parse(host.poll)["pan"]
+    refute_nil region
+    host.pan(40, 32)
+    assert_equal 40, host.store.overlay.x_offset
+    assert_equal 2, host.store.overlay.offset, "32pt down = 2 lines"
   end
 end

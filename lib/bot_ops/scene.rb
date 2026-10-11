@@ -332,21 +332,27 @@ module BotOps
       top = by + 68
       body_h = bh - 68 - 30
       visible = body_h / OVERLAY_LINE
-      # Columns from the measured character width, one spare for safety; the
-      # clip keeps anything that still doesn't fit inside the frame.
-      lines = o.lines(((bw - 64) / mono_char).floor - 1)
+      view_w = bw - 48 # the body's text width inside the clip
+      lines = o.lines((view_w / mono_char).floor)
       o.offset = o.offset.clamp(0, [lines.size - visible, 0].max)
+      content_w = lines.map { |l| Overlay.columns(l) }.max.to_i * mono_char
+      max_x = [content_w - view_w, 0].max
+      o.x_offset = o.x_offset.clamp(0, max_x)
+      left = bx + 24 - o.x_offset
+
+      # Lines are drawn as written (never wrapped) and clipped to the body;
+      # the body pans sideways (drag it, or swipe sideways) to show the rest.
       @c.clip(bx + 16, top - 2, bw - 38, body_h + 4) do
         lines[o.offset, visible].to_a.each_with_index do |(style, a, b, label_w), i|
           y = top + i * OVERLAY_LINE
           case style
           when :field
-            txt(a, bx + 24, y, size: OVERLAY_TEXT, color: MUTED, mono: true)
-            txt(b, bx + 24 + label_w * mono_char, y, size: OVERLAY_TEXT, color: TEXT, mono: true)
-          when :heading then txt(a, bx + 24, y, size: OVERLAY_TEXT, color: CYAN, weight: :bold)
+            txt(a, left, y, size: OVERLAY_TEXT, color: MUTED, mono: true)
+            txt(b, left + label_w * mono_char, y, size: OVERLAY_TEXT, color: TEXT, mono: true)
+          when :heading then txt(a, left, y, size: OVERLAY_TEXT, color: CYAN, weight: :bold)
           when :note then txt(a, bx + 24, y, size: OVERLAY_TEXT, color: DIM, mono: true)
           when :blank then nil
-          else txt(a, bx + 24, y, size: OVERLAY_TEXT, color: TEXT, mono: true)
+          else txt(a, left, y, size: OVERLAY_TEXT, color: TEXT, mono: true)
           end
         end
       end
@@ -358,8 +364,44 @@ module BotOps
         @c.rect(bx + bw - 16, top, 4, track_h, curve: 2, fill: col(TRACK))
         @c.rect(bx + bw - 16, thumb_y, 4, thumb_h, curve: 2, fill: col(BOLT, 0.9))
       end
-      hint = lines.size > visible ? "Scroll for more  ·  " : ""
-      txt("#{hint}Esc, X or a click outside closes", bx + 24, by + bh - 22, size: 8, color: DIM)
+      if max_x.positive?
+        track_w = bw - 64
+        thumb_w = [track_w * view_w / content_w, 24].max
+        thumb_x = bx + 24 + (track_w - thumb_w) * o.x_offset / max_x
+        @c.rect(bx + 24, top + body_h + 4, track_w, 4, curve: 2, fill: col(TRACK))
+        @c.rect(thumb_x, top + body_h + 4, thumb_w, 4, curve: 2, fill: col(BOLT, 0.9))
+      end
+      hints = []
+      hints << "Scroll for more" if lines.size > visible
+      hints << "drag or swipe sideways for long lines" if max_x.positive?
+      hints << "Esc, X or a click outside closes"
+      txt(hints.join("  ·  "), bx + 24, by + bh - 18, size: 8, color: DIM)
+    end
+
+    # The overlay's body, where a drag pans the text ([x, y, w, h]), or nil.
+    def pan_region
+      return nil unless @store.overlay
+      w, h = @width, @height
+      bw = [[w - 260, 1040].min, 560].max
+      bh = [[h - 200, 780].min, 320].max
+      bx = (w - bw) / 2
+      by = (h - bh) / 2
+      [bx + 16, by + 66, bw - 38, bh - 68 - 30 + 4]
+    end
+
+    # Drag or sideways swipe, in points: moves the text with the pointer.
+    def pan(dx, dy)
+      o = @store.overlay
+      return false unless o && (dx != 0 || dy != 0)
+      o.pan_by(dx)
+      @pan_dy = (@pan_dy || 0) + dy
+      lines = (@pan_dy / OVERLAY_LINE.to_f).truncate
+      if lines != 0
+        o.scroll_by(lines)
+        @pan_dy -= lines * OVERLAY_LINE
+      end
+      @host.invalidate
+      true
     end
 
     # Opens a cloud session's page at claude.ai in the browser.

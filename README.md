@@ -62,8 +62,10 @@ The three buttons at the right of the header minimize (leaving fullscreen
 first if needed), enter or leave fullscreen, and quit. The **Settings** page
 has the same controls plus a title-bar toggle.
 Click a tool call, prompt, event-log line, machine, or a live session's
-last tool for the full detail in a box over the dashboard; it scrolls, and
-Esc, its X or a click outside closes it. Full text (a tool's whole input, a
+last tool for the full detail in a box over the dashboard. Text is shown
+exactly as written, never wrapped (code's indentation means something), so
+drag inside the box or swipe sideways to read long lines; it also scrolls
+up and down, and Esc, its X or a click outside closes it. Full text (a tool's whole input, a
 prompt, an error) is kept for this machine's sessions only; other machines
 and cloud sessions send short excerpts.
 

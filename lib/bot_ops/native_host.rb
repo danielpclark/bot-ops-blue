@@ -110,7 +110,7 @@ module BotOps
       return "" unless @dirty
       @dirty = false
       @canvas = @scene.build
-      @canvas.to_json(drag: [0, 0, @scene.width, Layout::HEADER_H], resize: @scene.resize_grip)
+      @canvas.to_json(drag: [0, 0, @scene.width, Layout::HEADER_H], resize: @scene.resize_grip, pan: @scene.pan_region)
     end
 
     # The window's size in points changed (fullscreen, resize); lay out again.
@@ -159,6 +159,12 @@ module BotOps
       nil
     end
 
+    # A drag in the overlay's body, or a sideways swipe, in points.
+    def pan(dx, dy)
+      @dirty = true if @scene.pan(dx.to_i, dy.to_i)
+      nil
+    end
+
     # Mouse wheel / trackpad lines from the native side.
     def scroll(lines)
       @dirty = true if @scene.scroll(lines.to_i)
@@ -196,6 +202,6 @@ module BotOps
       @channel.name
     end
 
-    logged :poll, :hit, :resize, :fullscreen_changed, :scroll, :key, :mono_advance
+    logged :poll, :hit, :resize, :fullscreen_changed, :scroll, :key, :mono_advance, :pan
   end
 end
