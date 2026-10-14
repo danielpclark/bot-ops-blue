@@ -14,8 +14,8 @@ module BotOps
     PATH = File.expand_path("icons.rb", __dir__)
 
     NAMES = %w[
-      activity app-window bot calendar chart-line chart-no-axes-column chevron-right circle-alert circle-dot
-      clock code-xml cpu diamond folder-git-2 git-merge hexagon house info layers maximize-2
+      activity alarm-clock app-window bot calendar chart-line chart-no-axes-column chevron-right circle-alert circle-dot
+      clock code-xml cpu database diamond folder-git-2 git-merge hexagon history house info layers maximize-2
       message-square message-square-text minus monitor scroll-text server settings square-activity wrench x zap
     ].freeze
 

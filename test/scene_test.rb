@@ -39,7 +39,7 @@ class SceneTest < Minitest::Test
     assert_includes c.texts, "api · CLI · api-fix"
     assert_includes c.texts, "Opus 5.5"
     assert_includes c.texts, "1 MACHINE ONLINE"
-    assert_empty %w[Load Memory Disk Uptime] - c.texts, "four health gauges and their tiles"
+    assert_empty %w[LOAD MEMORY DISK UPTIME] - c.texts, "four health gauges and their tiles"
   end
 
   def test_header_logo_is_the_bot_portrait_in_a_round_frame

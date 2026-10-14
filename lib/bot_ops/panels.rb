@@ -296,6 +296,9 @@ module BotOps
       m && m["health"]["load"] ? m : @store.local_machine # claude.ai reports no machine health
     end
 
+    # Four ring gauges over a strip of three figures, after the designer's
+    # reference: rings separated by faint dividers with a spark at the top,
+    # and one card for uptime, load average and the report's age.
     def draw_health_body(w, h)
       m = health_machine
       return empty_state("Waiting for the first probe…") unless m
@@ -303,26 +306,43 @@ module BotOps
       load_pct = hl["load"] && hl["cpus"].to_i.positive? ? hl["load"] * 100.0 / hl["cpus"] : 0
       host_sessions = @store.sessions.select { |s| s["host"] == m["host"] }
       busy_pct = host_sessions.empty? ? 0 : host_sessions.count { |s| s["status"] == "busy" } * 100.0 / host_sessions.size
-      gauges = [[load_pct, "Load", CYAN], [hl["mem_pct"], "Memory", "#3D8BFF"], [hl["disk_pct"], "Disk", CYAN], [busy_pct, "Busy", "#3D8BFF"]]
-      slot_w = w / gauges.size
-      gauges.each_with_index do |(pct, name, color), i|
-        donut(slot_w * i + slot_w / 2, 54, 37, pct.to_f, pct.to_f > 90 ? RED : color, label: name)
+      aqua = mix(CYAN, GREEN, 0.45)
+      gauges = [[load_pct, "Load", CYAN, "activity"], [hl["mem_pct"], "Memory", aqua, "cpu"],
+                [hl["disk_pct"], "Disk", CYAN, "database"], [busy_pct, "Busy", "#3D8BFF", "activity"]]
+      strip_h = [[(h * 0.3).round, 58].max, 72].min
+      strip_y = h - strip_h - 12
+      ring_area = strip_y - 8
+      slot_w = w / gauges.size.to_f
+      r = [(ring_area - 36) / 2.0, slot_w * 0.39, 46].min.floor
+      cy = ring_area / 2.0 - 5
+      gauges.each_with_index do |(pct, name, color, glyph), i|
+        donut(slot_w * i + slot_w / 2, cy, r, pct.to_f, pct.to_f > 90 ? RED : color, label: name, icon: glyph)
+        next if i.zero?
+        x = (slot_w * i).round
+        fade_vline(x, 8, ring_area - 4, BORDER, alpha: 0.5, peak: 0.3)
+        glow_dot(x - 2.5, 2, col(CYAN, 0.9), 5)
       end
       metrics = [
-        ["calendar", "Uptime",      hl["uptime_s"] ? uptime_text(hl["uptime_s"]) : "—"],
-        ["activity", "Load avg",    hl["load"] ? format("%.2f / %d", hl["load"], hl["cpus"].to_i) : "—"],
-        ["clock",    "Last report", Store.ago(m["seen_at"])]
+        ["history",     "Uptime",      hl["uptime_s"] ? uptime_text(hl["uptime_s"]) : "—"],
+        ["activity",    "Load avg",    hl["load"] ? format("%.2f / %d", hl["load"], hl["cpus"].to_i) : "—"],
+        ["alarm-clock", "Last report", Store.ago(m["seen_at"])]
       ]
-      gap = 10
-      mw = ((w - 28 - gap * 2) / 3.0).floor
-      th = [h - 130, 64].min
+      bx = 14
+      bw = w - 28
+      @c.glow(bx, strip_y, bw, strip_h, curve: 10, blur: 12, color: col(BOLT, 0.14))
+      box(bx, strip_y, bw, strip_h, curve: 10, stroke: col(BORDER, 0.55))
+      fade_line(bx + 10, bx + bw - 10, strip_y + 0.5, CYAN, alpha: 0.7, peak: 0.3)
+      cw = bw / 3.0
+      icon_d = [strip_h * 0.4, 30].min
       metrics.each_with_index do |(glyph, name, value), i|
-        x = 14 + i * (mw + gap)
-        box(x, 124, mw, th, curve: 9, stroke: col(BORDER, 0.5))
-        fade_line(x + 9, x + mw - 9, 124.5, CYAN, alpha: 0.4, peak: 0.3)
-        icon(glyph, x + 20, 141, 15, col(CYAN))
-        txt(fit_text(name, mw - 44, 11, :medium), x + 34, 134, size: 11, color: tint(CYAN, 0.2), weight: :medium)
-        txt(fit_text(value, mw - 24, 17, :semibold), x + 14, 154, size: 17, color: TEXT, weight: :semibold)
+        x = bx + cw * i
+        fade_vline(x.round, strip_y + 10, strip_y + strip_h - 10, BORDER, alpha: 0.5) if i.positive?
+        icon(glyph, x + 22, strip_y + strip_h / 2.0, icon_d, col(CYAN), width: 1.6)
+        tx = x + 40
+        tw = cw - 46
+        ty = strip_y + strip_h / 2.0 - 20
+        txt(fit_text(name.upcase, tw, 9.5, :semibold), tx, ty, size: 9.5, color: mix(CYAN, TEXT, 0.35), weight: :semibold, kerning: 1)
+        txt(fit_text(value, tw, 17, :semibold), tx, ty + 16, size: 17, color: TEXT, weight: :semibold)
       end
     end
 

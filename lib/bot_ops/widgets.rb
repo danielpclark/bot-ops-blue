@@ -235,27 +235,51 @@ module BotOps
     end
 
     # Points along a circle from start_deg sweeping sweep_deg (0 = 3 o'clock,
-    # clockwise).
+    # clockwise), close enough together that a thick stroke stays round.
     def arc_points(cx, cy, r, start_deg, sweep_deg)
-      n = [(sweep_deg.abs / 4.0).ceil, 2].max
+      n = [(sweep_deg.abs / 3.0).ceil, 2].max
       (0..n).map { |i| a = (start_deg + sweep_deg * i / n.to_f) * Math::PI / 180; [cx + r * Math.cos(a), cy + r * Math.sin(a)] }
     end
 
-    # Ring gauge: a dark track, an arc from 12 o'clock with round ends, the
-    # percentage in the middle and a label beneath.
+    # Ring gauge, drawn as a neon tube: a dark grooved track, an arc from
+    # 12 o'clock clockwise with round ends, a bloom around it and a lighter
+    # core along it. In the middle the percentage (its unit smaller) over an
+    # icon; beneath the ring, the label in small capitals.
     def donut(cx, cy, r, pct, color_hex, opts = {})
-      thickness = opts[:thickness] || 9
+      thickness = opts[:thickness] || [(r * 0.14).round, 4].max
       pct = [[pct.to_f, 0].max, 100].min
       rr = r - thickness / 2.0
-      @c.circle(cx, cy, rr, stroke: col(TRACK), strokewidth: thickness)
+      @c.circle(cx, cy, rr, stroke: col(TRACK, 0.95), strokewidth: thickness)
+      @c.circle(cx, cy, r, stroke: col(BORDER, 0.28), strokewidth: 1)
+      @c.circle(cx, cy, r - thickness, stroke: col(BORDER, 0.22), strokewidth: 1)
       if pct > 0.5
-        pts = arc_points(cx, cy, rr, -90, 360.0 * pct / 100.0)
-        @c.polyline(pts, stroke: col(color_hex, 0.08), strokewidth: thickness + 4, round: true)
+        sweep = 360.0 * pct / 100.0
+        # The bloom: faint passes widening outside the tube, each reaching a
+        # little past its ends so their blunt ends hide behind the round
+        # ones (round caps on every pass would stack into bright blobs).
+        1.upto(2) do |i|
+          sw = thickness + i * 2
+          ext = i * 180 / (Math::PI * rr)
+          @c.polyline(arc_points(cx, cy, rr, -90 - ext, sweep + 2 * ext), stroke: col(color_hex, 0.03), strokewidth: sw)
+        end
+        pts = arc_points(cx, cy, rr, -90, sweep)
         @c.polyline(pts, stroke: col(color_hex), strokewidth: thickness, round: true)
+        @c.polyline(pts, stroke: col(tint(color_hex, 0.55), 0.45), strokewidth: thickness * 0.25, round: true)
       end
-      txt("#{pct.round}%", cx - r, cy - 10, size: 16, color: TEXT, weight: :bold, width: r * 2, align: :center)
+      num = pct.round.to_s
+      ns = opts[:size] || (r * 0.56).round
+      us = (ns * 0.55).round
+      nw = text_w(num, ns, :bold)
+      x0 = cx - (nw + text_w("%", us, :semibold)) / 2.0
+      # Capitals sit 0.24em below the top of the text box and are 0.73em
+      # tall, so this centres the digits a little above the ring's centre.
+      ty = cy - (opts[:icon] ? r * 0.08 : 0) - ns * 0.6
+      txt(num, x0, ty, size: ns, color: TEXT, weight: :bold)
+      txt("%", x0 + nw, ty + (ns - us) * 0.93, size: us, color: TEXT, weight: :semibold)
+      icon(opts[:icon], cx, cy + r * 0.47, r * 0.34, col(color_hex, 0.9)) if opts[:icon]
       return unless opts[:label]
-      txt(opts[:label], cx - r - 10, cy + r + 8, size: 11, color: tint(CYAN, 0.25), weight: :medium, width: r * 2 + 20, align: :center)
+      txt(opts[:label].to_s.upcase, cx - r - 12, cy + r + 10, size: 10.5, color: mix(CYAN, TEXT, 0.35), weight: :semibold,
+                                    width: r * 2 + 24, align: :center, kerning: 1.6)
     end
 
     # ---- icons ---------------------------------------------------------
