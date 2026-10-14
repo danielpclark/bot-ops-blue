@@ -18,11 +18,10 @@
 //! handed to Ruby via host.resize so the panels stretch to fill the window.
 
 use eframe::egui::{self, Align2, Color32, FontFamily, FontId, Key, Painter, Pos2, Rect, Rounding, Stroke, Vec2};
-use rutie::{AnyObject, Integer, Module, NilClass, Object, RString, Thread};
+use rutie::{rubymodule, AnyObject, Integer, Object, RString, Thread};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::os::raw::c_void;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -79,6 +78,8 @@ struct HubApp {
     mono_advance: Option<i64>,
     /// While the grip is held: window size minus pointer, in unzoomed points.
     resizing: Option<Vec2>,
+    /// Focus last logged (BOT_OPS_DEBUG=1).
+    last_focused: Option<bool>,
 }
 
 /// Images Ruby can draw by name, embedded at build time. lib/bot_ops/canvas.rb
@@ -90,6 +91,13 @@ const ICON_PNG: &[u8] = include_bytes!("../assets/icon.png");
 const MIN_SIZE: Vec2 = Vec2::new(768.0, 512.0);
 
 const BACKGROUND: Color32 = Color32::from_rgb(5, 11, 20); // Theme::BG
+
+/// BOT_OPS_DEBUG=1 logs presses, window commands and focus or fullscreen
+/// changes to stderr, for chasing input problems.
+fn debug() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| matches!(std::env::var("BOT_OPS_DEBUG").as_deref(), Ok("1") | Ok("true")))
+}
 
 // ---- helpers ---------------------------------------------------------------
 
@@ -332,6 +340,27 @@ fn place_window(cc: &eframe::CreationContext<'_>, left: f64, top: f64) {
     window.setFrameTopLeftPoint(NSPoint::new(left, primary_height - top));
 }
 
+/// Where the pointer is, in egui points, straight from AppKit.
+///
+/// Used for presses instead of the position egui was given: after
+/// `toggleFullScreen` on a second display, winit hands egui the clicks in
+/// screen coordinates (the NSEvent carries no window, so its location is
+/// relative to the screen) until the window loses and regains focus, so
+/// every click landed off by the display's origin and missed its target.
+#[cfg(target_os = "macos")]
+fn appkit_pointer(frame: &eframe::Frame, zoom: f32) -> Option<Pos2> {
+    use objc2_app_kit::{NSEvent, NSView};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let handle = frame.window_handle().ok()?;
+    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else { return None };
+    let view: &NSView = unsafe { appkit.ns_view.cast().as_ref() };
+    let window = view.window()?;
+    // AppKit's y runs up from the window's bottom; egui's down from the top.
+    let in_window = window.convertPointFromScreen(unsafe { NSEvent::mouseLocation() });
+    let height = view.frame().size.height;
+    Some(Pos2::new(in_window.x as f32 / zoom, (height - in_window.y) as f32 / zoom))
+}
+
 // ---- Dock ------------------------------------------------------------------
 
 /// Shows `count` on the Dock icon (nothing for 0) and, when it went up,
@@ -465,14 +494,22 @@ impl HubApp {
         }
     }
 
-    fn handle_press(&mut self, ctx: &egui::Context, pos: Pos2) {
+    /// A press at `pos`. `drag_origin` is where egui itself puts the pointer,
+    /// so a pan or resize that follows measures its movement against egui's
+    /// own later positions (see appkit_pointer).
+    fn handle_press(&mut self, ctx: &egui::Context, pos: Pos2, drag_origin: Pos2) {
         if let Some((x, y, w, h)) = self.frame.pan {
             if Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h)).contains(pos) {
-                self.panning = Some(pos);
+                self.panning = Some(drag_origin);
                 return;
             }
         }
         let hit = self.hits_rects.iter().rev().find(|(r, _)| r.contains(pos)).map(|(_, id)| *id);
+        if debug() {
+            eprintln!("bot_ops_native: press at ({:.0}, {:.0}) hit={:?} fullscreen={} focused={:?} zoom={:.3} screen={:?} hits={}",
+                      pos.x, pos.y, hit, is_fullscreen(ctx), ctx.input(|i| i.viewport().focused), ctx.zoom_factor(),
+                      ctx.screen_rect().size(), self.hits_rects.len());
+        }
         if let Some(id) = hit {
             match self.call_host("hit", &[id as i64]) {
                 Ok(cmd) => self.window_command(ctx, &cmd),
@@ -487,7 +524,7 @@ impl HubApp {
             if Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h)).contains(pos) {
                 // Remember where in the corner it was grabbed, in unzoomed points.
                 let zoom = ctx.zoom_factor();
-                self.resizing = Some(ctx.screen_rect().size() * zoom - pos.to_vec2() * zoom);
+                self.resizing = Some(ctx.screen_rect().size() * zoom - drag_origin.to_vec2() * zoom);
                 return;
             }
         }
@@ -501,6 +538,9 @@ impl HubApp {
     // Toggles act on the window's real state, so they cannot drift out of sync
     // with it (e.g. after leaving fullscreen with Esc or the green button).
     fn window_command(&mut self, ctx: &egui::Context, cmd: &str) {
+        if debug() {
+            eprintln!("bot_ops_native: command {cmd:?} fullscreen={}", is_fullscreen(ctx));
+        }
         match cmd {
             "quit" => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             cmd if cmd.starts_with("open:") => open_session_url(&cmd["open:".len()..]),
@@ -615,8 +655,18 @@ impl HubApp {
     // fullscreen first.
     fn sync_window_state(&mut self, ctx: &egui::Context) {
         let fullscreen = is_fullscreen(ctx);
+        if debug() {
+            let focused = ctx.input(|i| i.viewport().focused);
+            if self.last_focused != focused {
+                self.last_focused = focused;
+                eprintln!("bot_ops_native: focused={focused:?} fullscreen={fullscreen}");
+            }
+        }
         if self.reported_fullscreen != Some(fullscreen) {
             self.reported_fullscreen = Some(fullscreen);
+            if debug() {
+                eprintln!("bot_ops_native: fullscreen={fullscreen} screen={:?} zoom={:.3}", ctx.screen_rect().size(), ctx.zoom_factor());
+            }
             if self.call_host("fullscreen_changed", &[fullscreen as i64]).is_err() {
                 eprintln!("bot_ops_native: Ruby raised in fullscreen_changed");
             }
@@ -851,7 +901,7 @@ impl HubApp {
 }
 
 impl eframe::App for HubApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         snapshot(ctx);
         if std::mem::take(&mut self.start_fullscreen) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
@@ -866,9 +916,20 @@ impl eframe::App for HubApp {
         self.poll_ruby(ctx);
 
         if ctx.input(|i| i.pointer.primary_pressed()) {
-            if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
-                self.handle_press(ctx, pos);
+            let reported = ctx.input(|i| i.pointer.interact_pos());
+            #[cfg(target_os = "macos")]
+            let pos = appkit_pointer(frame, ctx.zoom_factor()).or(reported);
+            #[cfg(not(target_os = "macos"))]
+            let pos = reported;
+            if let Some(pos) = pos {
+                if debug() {
+                    if let Some(r) = reported.filter(|r| (*r - pos).length() > 2.0) {
+                        eprintln!("bot_ops_native: egui had the press at ({:.0}, {:.0}); AppKit at ({:.0}, {:.0})", r.x, r.y, pos.x, pos.y);
+                    }
+                }
+                self.handle_press(ctx, pos, reported.unwrap_or(pos));
                 self.poll_ruby(ctx);
+            } else if debug() {                eprintln!("bot_ops_native: press with no pointer position");
             }
         }
 
@@ -882,155 +943,106 @@ impl eframe::App for HubApp {
 
 // ---- Ruby binding -----------------------------------------------------------
 
-extern "C" {
-    fn rb_thread_call_without_gvl(
-        func: extern "C" fn(*mut c_void) -> *mut c_void,
-        data1: *mut c_void,
-        ubf: extern "C" fn(*mut c_void),
-        data2: *mut c_void,
-    ) -> *mut c_void;
+/// `BotOps::Native.run(host, width, height, title, position)`: opens the
+/// window and blocks until it is closed. `position` is "left,top" in global
+/// screen points, or "" to leave placement to the OS. A wrong argument
+/// type raises TypeError in Ruby.
+#[rubymodule(path = "BotOps::Native")]
+mod native {
+    use rutie::AnyObject;
+
+    pub fn run(host: &AnyObject, width: i64, height: i64, title: String, position: String) {
+        super::run_window(host.clone(), width as f32, height as f32, title, position);
+    }
 }
 
-/// Runs `f` without the GVL; Ruby calls `on_unblock` (from another thread,
-/// possibly several times) when it wants this thread back, e.g. on SIGTERM.
-///
-/// Calls rb_thread_call_without_gvl directly: rutie 0.13's wrapper frees its
-/// unblock closure after the first call, so a second call (Ruby retries
-/// interrupts) used freed memory and crashed in the timer thread, which then
-/// deadlocked against this one.
-fn without_gvl<F: FnOnce() -> R, R>(f: F, on_unblock: &(dyn Fn() + Sync)) -> R {
-    struct Call<F, R> {
-        f: Option<F>,
-        out: Option<R>,
+fn run_window(host: AnyObject, w: f32, h: f32, title: String, position: String) {
+    let position = position.split_once(',').and_then(|(x, y)| {
+        Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?))
+    });
+
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title(title.clone())
+        .with_decorations(false)
+        .with_resizable(true)
+        .with_min_inner_size([MIN_SIZE.x, MIN_SIZE.y])
+        .with_inner_size([w, h]);
+    // On macOS the window is placed through AppKit before it is first
+    // shown (see place_window); elsewhere egui positions it.
+    #[cfg(not(target_os = "macos"))]
+    if let Some((x, y)) = position {
+        viewport = viewport.with_position([x, y]);
     }
-    extern "C" fn run<F: FnOnce() -> R, R>(data: *mut c_void) -> *mut c_void {
-        let call = unsafe { &mut *(data as *mut Call<F, R>) };
-        if let Some(f) = call.f.take() {
-            call.out = Some(f());
+    if let Some((iw, ih, rgba)) = decode_png(ICON_PNG) {
+        viewport = viewport.with_icon(Arc::new(egui::IconData { rgba, width: iw, height: ih }));
+    }
+    let start_fullscreen = matches!(std::env::var("BOT_OPS_FULLSCREEN").as_deref(), Ok("1") | Ok("true"));
+    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    // Run the window loop without the GVL: holding it here would starve
+    // every Ruby thread for as long as the window is open.
+    let mut once = Some((options, host));
+    // Ruby calls the unblock function whenever it wants this thread back
+    // to handle an interrupt: a TERM or Ctrl+C, but also routine ones such
+    // as SIGCHLD from the probe's sysctl/df runs, many times a minute.
+    // So it only wakes the loop: the next frame calls into Ruby, which
+    // handles the interrupt there (a TERM comes back as "quit" from poll).
+    let window_ctx: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
+    let ctx_for_loop = Arc::clone(&window_ctx);
+    let unblock = move || {
+        if let Some(ctx) = window_ctx.lock().ok().and_then(|c| c.clone()) {
+            ctx.request_repaint();
         }
-        std::ptr::null_mut()
+    };
+    let result = Thread::call_without_gvl(
+        move || {
+            let (options, host) = once.take().expect("window loop runs once");
+            let ctx_for_loop = Arc::clone(&ctx_for_loop);
+            eframe::run_native(
+                &title,
+                options,
+                Box::new(move |cc| {
+                    if let Ok(mut slot) = ctx_for_loop.lock() {
+                        *slot = Some(cc.egui_ctx.clone());
+                    }
+                    #[cfg(target_os = "macos")]
+                    if let Some((x, y)) = position {
+                        place_window(cc, x as f64, y as f64);
+                    }
+                    install_fonts(&cc.egui_ctx);
+                    // Zoom is driven by fit_to_window; Cmd +/- would fight it.
+                    cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
+                    Ok(Box::new(HubApp {
+                        host,
+                        textures: load_textures(&cc.egui_ctx),
+                        frame: Frame::default(),
+                        hits_rects: Vec::new(),
+                        design: Vec2::new(w, h),
+                        laid_out: Vec2::new(w, h),
+                        decorated: false,
+                        start_fullscreen,
+                        reported_fullscreen: None,
+                        minimize_pending: false,
+                        minimize_at: None,
+                        poll_failures: 0,
+                        scroll_lines: 0.0,
+                        scroll_x: 0.0,
+                        badge: 0,
+                        panning: None,
+                        mono_advance: None,
+                        resizing: None,
+                        last_focused: None,
+                    }))
+                }),
+            )
+        },
+        Some(unblock),
+    );
+    if let Err(e) = result {
+        eprintln!("bot_ops_native: window error: {e}");
     }
-    extern "C" fn unblock(data: *mut c_void) {
-        let cb = unsafe { &*(data as *const &(dyn Fn() + Sync)) };
-        cb();
-    }
-    let mut call = Call { f: Some(f), out: None };
-    unsafe {
-        rb_thread_call_without_gvl(
-            run::<F, R>,
-            &mut call as *mut Call<F, R> as *mut c_void,
-            unblock,
-            &on_unblock as *const &(dyn Fn() + Sync) as *mut c_void,
-        );
-    }
-    call.out.expect("the window loop ran")
 }
-
-rutie::class!(BotOpsNativeClass);
-
-rutie::methods!(
-    BotOpsNativeClass,
-    _rtself,
-    fn native_run(host: AnyObject, width: Integer, height: Integer, title: RString, position: RString) -> NilClass {
-        let host = host.expect("host object required");
-        let w = width.map(|v| v.to_i64() as f32).unwrap_or(1536.0);
-        let h = height.map(|v| v.to_i64() as f32).unwrap_or(1024.0);
-        let title = title.map(|t| t.to_string()).unwrap_or_else(|_| "Bot Ops Blue".to_owned());
-
-        // "left,top" in global screen points; "" leaves placement to the OS.
-        let position = position.map(|p| p.to_string()).unwrap_or_default();
-        let position = position.split_once(',').and_then(|(x, y)| {
-            Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?))
-        });
-
-        let mut viewport = egui::ViewportBuilder::default()
-            .with_title(title.clone())
-            .with_decorations(false)
-            .with_resizable(true)
-            .with_min_inner_size([MIN_SIZE.x, MIN_SIZE.y])
-            .with_inner_size([w, h]);
-        // On macOS the window is placed through AppKit before it is first
-        // shown (see place_window); elsewhere egui positions it.
-        #[cfg(not(target_os = "macos"))]
-        if let Some((x, y)) = position {
-            viewport = viewport.with_position([x, y]);
-        }
-        if let Some((iw, ih, rgba)) = decode_png(ICON_PNG) {
-            viewport = viewport.with_icon(Arc::new(egui::IconData { rgba, width: iw, height: ih }));
-        }
-        let start_fullscreen = matches!(std::env::var("BOT_OPS_FULLSCREEN").as_deref(), Ok("1") | Ok("true"));
-        let options = eframe::NativeOptions { viewport, ..Default::default() };
-        // Run the window loop without the GVL: holding it here would starve
-        // every Ruby thread for as long as the window is open.
-        let mut once = Some((options, host));
-        // Ruby calls the unblock function whenever it wants this thread back
-        // to handle an interrupt: a TERM or Ctrl+C, but also routine ones such
-        // as SIGCHLD from the probe's sysctl/df runs, many times a minute.
-        // So it only wakes the loop: the next frame calls into Ruby, which
-        // handles the interrupt there (a TERM comes back as "quit" from poll).
-        let window_ctx: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
-        let ctx_for_loop = Arc::clone(&window_ctx);
-        let unblock = move || {
-            if let Some(ctx) = window_ctx.lock().ok().and_then(|c| c.clone()) {
-                ctx.request_repaint();
-            }
-        };
-        let result = without_gvl(
-            move || {
-                let (options, host) = once.take().expect("window loop runs once");
-                let ctx_for_loop = Arc::clone(&ctx_for_loop);
-                eframe::run_native(
-                    &title,
-                    options,
-                    Box::new(move |cc| {
-                        if let Ok(mut slot) = ctx_for_loop.lock() {
-                            *slot = Some(cc.egui_ctx.clone());
-                        }
-                        #[cfg(target_os = "macos")]
-                        if let Some((x, y)) = position {
-                            place_window(cc, x as f64, y as f64);
-                        }
-                        install_fonts(&cc.egui_ctx);
-                        // Zoom is driven by fit_to_window; Cmd +/- would fight it.
-                        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
-                        Ok(Box::new(HubApp {
-                            host,
-                            textures: load_textures(&cc.egui_ctx),
-                            frame: Frame::default(),
-                            hits_rects: Vec::new(),
-                            design: Vec2::new(w, h),
-                            laid_out: Vec2::new(w, h),
-                            decorated: false,
-                            start_fullscreen,
-                            reported_fullscreen: None,
-                            minimize_pending: false,
-                            minimize_at: None,
-                            poll_failures: 0,
-                            scroll_lines: 0.0,
-                            scroll_x: 0.0,
-                            badge: 0,
-                            panning: None,
-                            mono_advance: None,
-                            resizing: None,
-                        }))
-                    }),
-                )
-            },
-            &unblock,
-        );
-        if let Err(e) = result {
-            eprintln!("bot_ops_native: window error: {e}");
-        }
-        NilClass::new()
-    }
-);
 
 #[no_mangle]
 pub extern "C" fn Init_bot_ops_native() {
-    let mut module = Module::from_existing("BotOps");
-    module.define(|m| {
-        m.define_nested_class("Native", None).define(|klass| {
-            klass.def_self("run", native_run);
-        });
-    });
+    native::define_ruby();
 }

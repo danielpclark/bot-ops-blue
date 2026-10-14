@@ -128,7 +128,8 @@ module BotOps
     CONTROL_Y = 9
     CONTROLS = [[:minimize, 1470], [:toggle_fullscreen, 1488], [:quit, 1506]].freeze
 
-    # [[action, x, y, size], ...]: each icon's box in window coordinates.
+    # [[action, x, y, size], ...]: each icon's box in window coordinates,
+    # at the top edge whether windowed or fullscreen.
     def window_controls
       dx = @width - Layout::WIDTH
       CONTROLS.map { |action, x| [action, dx + x, CONTROL_Y, CONTROL_SIZE] }

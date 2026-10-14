@@ -99,7 +99,9 @@ Hourly usage from every source is saved to
 include cloud sessions and other machines, which report only their last
 24 hours. This machine's own transcripts are read back 7 days at startup.
 
-In fullscreen macOS slides its menu bar over the top edge, so use the keys:
+In fullscreen macOS slides its menu bar over the top edge once the pointer
+rests there, and a click under it goes to the menu bar rather than to the
+window controls beneath; move the pointer away and back, or use the keys:
 **Esc** leaves fullscreen, **F11** or **Ctrl+Cmd+F** toggles it.
 
 The layout stretches to the window: the content is zoomed until the
@@ -249,10 +251,18 @@ To check what the window really draws without screen-recording permission, start
 
 The extension is bound with [Rutie](https://github.com/danielpclark/rutie).
 Rutie releases track Ruby's special-constant layout, so the version has to
-match the Ruby in use: `rutie = "0.13"` for Ruby 3.x (what `Cargo.toml`
-pins), `0.14` for Ruby 4.0. Using 0.9 with Ruby 3 segfaults the first time a
-`nil` crosses the boundary, which is why the host protocol only exchanges
-strings and integers.
+match the Ruby in use: `rutie = "0.13.3"` for Ruby 3.2 to 3.4 (what
+`Cargo.toml` pins), `0.14` for Ruby 4.0. Using 0.9 with Ruby 3 segfaults the
+first time a `nil` crosses the boundary, which is why the host protocol only
+exchanges strings and integers.
+
+The binding uses Rutie's `derive` feature: `BotOps::Native` is a
+`#[rubymodule]` whose `run` is an ordinary Rust function with typed
+parameters, so a wrong argument raises `TypeError` in Ruby instead of being
+silently defaulted. The window loop runs under `Thread::call_without_gvl`;
+0.13.2 fixed that call freeing its unblock function after Ruby's first
+interrupt (the crate used to call `rb_thread_call_without_gvl` itself to
+avoid the crash).
 
 ## Adding comms
 
@@ -300,3 +310,32 @@ Supported event types (see `Store#apply`):
 - **Windows**: build from a shell where `cargo` and `ruby` are on `PATH`
   (RubyInstaller + rustup). The DLL is installed as `bot_ops_native.so`,
   which is the extension Ruby expects there.
+- **macOS, fullscreen on a second display**: until the window loses and
+  regains focus, winit reports clicks in screen coordinates (the events
+  arrive without a window), so every click missed by the display's offset
+  and the header controls seemed dead. The native host places each press by
+  AppKit's own cursor location instead; `BOT_OPS_DEBUG=1` logs both when
+  they disagree.
+
+## Contributing
+
+Pull requests are triaged by an AI reviewer before a person reads them, so
+the description has to carry everything needed to judge the change without
+running it:
+
+- **Before and after screenshots** for anything visible, cropped to the
+  panel or control that changed, taken from the real window rather than
+  the SVG preview (the preview understates egui's glow and blends). Start
+  the dashboard with `env BOT_OPS_SNAPSHOT_DIR=/some/dir bundle exec rake run`,
+  then `touch /some/dir/request`: the window writes its current frame to
+  `/some/dir/window.png`.
+- **Full details of the change**: what was wrong or missing, what the
+  change does and why that approach, every file touched and why, and what
+  you checked (`rake test`, `rake preview`, the window itself, on which
+  monitor and at what size).
+- One change per pull request, with a commit message that gives the reason,
+  not just the what.
+
+A PR without the screenshots or the details is sent back for them before
+review.
+
