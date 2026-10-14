@@ -7,11 +7,16 @@ module BotOps
     # Accents are sampled from assets/bot-blue.png (the logo): the royal
     # armour blues, the glowing cyan eyes, ice-white plating and the gold
     # crest. Backgrounds keep the original dark navy.
-    BG      = "#050B14"
-    PANEL   = "#07131F"
-    PANEL2  = "#0A1A2A"
-    TRACK   = "#0E2234"
-    LINE    = "#113347"
+    BG      = "#040A17"
+    BG_TOP  = "#071330"   # the background brightens toward the top left
+    PANEL   = "#081429"   # panel fill, bottom of its gradient
+    PANEL_TOP = "#0C1D3C" # panel fill, top of its gradient
+    PANEL2  = "#0C1B36"   # cards inside a panel
+    OVERLAY_BG = "#07131F" # the details box: dark, so its text stands out
+    CARD_TOP = "#10244A"
+    TRACK   = "#132A52"   # gauge and bar tracks
+    LINE    = "#16305E"
+    BORDER  = "#2457E6"   # panel and card outlines
 
     EDGE      = "#0B3BF0" # deep electric royal armour: frame glow
     EDGE_SOFT = "#0A2CB8" # the same, darker, for boxes inside a frame
@@ -26,11 +31,13 @@ module BotOps
     YELLOW  = "#F0B23C"   # gold crest
     ORANGE  = "#C9852E"   # darker crest gold
     RED     = "#FF4D6A"
-    GREEN   = "#16D46B"   # rich emerald (online, healthy)
+    GREEN   = "#2FDC8A"   # mint (busy, online, healthy)
+    SLATE   = "#6F82B8"   # idle and ended
 
     TEXT    = "#E8F0FB"   # ice-white plating
-    MUTED   = "#8EA0D6"
-    DIM     = "#3A4C86"
+    MUTED   = "#8EA2CF"
+    SUBTLE  = "#5E86D6"   # secondary text on cards (project · client)
+    DIM     = "#3D5085"
 
     FAMILY  = "Sans"
     MONO    = "Monospace"
@@ -42,13 +49,13 @@ module BotOps
     end
 
     STATUS_COLORS = {
-      "Busy"      => CYAN,
+      "Busy"      => GREEN,
       "Needs you" => YELLOW,
-      "Ended"     => DIM,
+      "Ended"     => SLATE,
       "Running"   => TEAL,
       "Completed" => TEAL,
       "Pending"   => YELLOW,
-      "Idle"      => DIM,
+      "Idle"      => SLATE,
       "Failed"    => RED,
       "Error"     => RED,
       "Paused"    => ORANGE

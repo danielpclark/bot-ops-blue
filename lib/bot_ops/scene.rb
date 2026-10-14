@@ -46,32 +46,30 @@ module BotOps
 
     # ---- header --------------------------------------------------------
 
+    STAT_ICONS = %w[activity zap message-square settings layers].freeze
+    STAT_X0 = 424      # the stats strip, in design coordinates
+    STAT_X1 = 1112
+
     def draw_header
       w = @width
       dx = w - Layout::WIDTH # right-hand header items stay pinned to the right edge
       hh = Layout::HEADER_H
-      @c.rect(12, 6, w - 24, hh - 12, curve: 8, fill: col(PANEL))
-      electric_frame(12, 6, w - 24, hh - 12, curve: 8)
+      grad_rect(0, 0, w, hh, col(BG_TOP, 0.9), col(BG, 0.0))
+      @c.glow(0, hh - 5, w, 2, blur: 14, color: col(BOLT, 0.35))
+      fade_line(0, w, hh - 4, CYAN, alpha: 0.95, width: 2, peak: 0.32)
+      fade_line(0, w, hh - 1, BOLT, alpha: 0.4, width: 1, peak: 0.6)
 
       # logo: the bot portrait in a round, glowing frame like a profile photo
-      @c.circle(60, 43, 33, fill: col(CYAN, 0.10))
-      @c.image_circle("logo", 60, 43, 28)
-      @c.circle(60, 43, 28.5, stroke: col(CYAN, 0.95), strokewidth: 2)
-      @c.circle(60, 43, 32, stroke: col(BLUE, 0.45))
+      @c.glow(29, 12, 62, 62, curve: 31, blur: 10, color: col(CYAN, 0.18))
+      @c.image_circle("logo", 60, 43, 29)
+      @c.circle(60, 43, 30, stroke: col(CYAN), strokewidth: 2.5)
 
-      txt("BOT OPS BLUE", 108, 22, size: 20, color: CYAN, weight: :bold, kerning: 3)
-      txt("AUTOMATE   /   CREATE   /   SCALE", 110, 52, size: 9, color: MUTED, kerning: 2)
-      vline(432, 18, hh - 18, col(CYAN, 0.25))
+      bot = "BOT OPS "
+      txt(bot, 112, 19, size: 25, color: TEXT, font: :display, kerning: 1.5)
+      txt("BLUE", 112 + text_w(bot, 25, font: :display, kerning: 1.5), 19, size: 25, color: CYAN, font: :display, kerning: 1.5)
+      txt("AUTOMATE   /   CREATE   /   SCALE", 114, 55, size: 9.5, color: "#B9C6E6", weight: :medium, kerning: 2.4)
 
-      x = 452
-      @store.stats.each_with_index do |s, i|
-        label(s.label, x, 24, size: 8, color: MUTED, kerning: 1)
-        txt(s.value, x, 40, size: 20, color: TEXT, weight: :bold)
-        off = 10 + s.value.length * 12
-        txt(clip(s.note, (STAT_WIDTHS[i] - off - 12) / 5), x + off, 46, size: 8, color: s.note_color)
-        x += STAT_WIDTHS[i] || 110
-        vline(x - 10, 22, hh - 22, col(CYAN, 0.12))
-      end
+      draw_stats(dx)
 
       online = @store.online_machines.size
       ok = online.positive? && @store.probe_error.nil?
@@ -79,12 +77,44 @@ module BotOps
                elsif online.zero? then "WAITING FOR DATA"
                else "#{online} MACHINE#{'S' unless online == 1} ONLINE"
                end
-      glow_dot(dx + 1136, 33, col(ok ? GREEN : (online.zero? ? YELLOW : RED)), 7)
-      txt(status, dx + 1150, 28, size: 9, color: ok ? GREEN : (online.zero? ? YELLOW : RED), weight: :bold)
-      txt(clock_text, dx + 1150, 48, size: 9, color: TEXT)
-      vline(dx + 1312, 20, hh - 20, col(CYAN, 0.25))
-      txt(@store.collector_status, dx + 1330, 22, size: 9, color: TEAL, width: 128)
+      c = ok ? GREEN : (online.zero? ? YELLOW : RED)
+      glow_dot(dx + 1132, 29, col(c), 10)
+      txt(status, dx + 1150, 25, size: 12, color: c, weight: :semibold)
+      txt(clock_text, dx + 1150, 47, size: 11, color: TEXT)
+      fade_vline(dx + 1312, 16, hh - 16, CYAN, alpha: 0.45)
+      cloud_symbol(dx + 1336, 37, 26, col("#4DA8FF"), lit: true)
+      status = @store.collector_status.to_s
+      first, rest = status.start_with?("Collecting on ") ? ["Collecting on", status.delete_prefix("Collecting on ")] : [status, nil]
+      txt(fit_text(first, 150, 10.5), dx + 1358, 25, size: 10.5, color: MUTED)
+      txt(fit_text(rest, 150, 10.5), dx + 1358, 42, size: 10.5, color: TEXT) if rest
       draw_window_controls
+    end
+
+    # Header stats in a raised strip: icon, label, the number and a note.
+    def draw_stats(dx)
+      x0 = STAT_X0
+      x1 = STAT_X1 + dx
+      hh = Layout::HEADER_H
+      frame(x0, 10, x1 - x0, hh - 24, curve: 12, glow: 0.18)
+      stats = @store.stats
+      slot = (x1 - x0 - 16) / stats.size.to_f
+      stats.each_with_index do |s, i|
+        x = x0 + 14 + slot * i
+        tile = 28
+        @c.glow(x, 19, tile, tile, curve: 8, blur: 6, color: col(BOLT, 0.12))
+        grad_rect(x, 19, tile, tile, col("#2D7BFF", 0.9), col("#1640B8", 0.9), curve: 8)
+        icon(STAT_ICONS[i], x + tile / 2.0, 19 + tile / 2.0, 16, col("#FFFFFF"))
+        tx = x + tile + 9
+        avail = slot - tile - 14
+        lsize = text_w(s.label, 9.5, :semibold, kerning: 0.3) <= avail ? 9.5 : 8.5
+        txt(fit_text(s.label, avail, lsize, :semibold), tx, 18, size: lsize, color: TEXT, weight: :semibold, kerning: 0.3)
+        txt(s.value, tx, 33, size: 22, color: "#FFFFFF", weight: :bold)
+        vw = text_w(s.value, 22, :bold)
+        note = fit_text(s.note, avail - vw - 8, 10.5, :medium)
+        txt(note, tx + vw + 7, 43, size: 10.5, color: s.note_color, weight: :medium) if vw + 30 < avail
+        @c.hit(x - 6, 14, slot - 8, hh - 32) { open_overlay(stat_overlay(i)) }
+        fade_vline(x0 + slot * (i + 1) + 4, 20, hh - 24, CYAN, alpha: 0.3) if i < stats.size - 1
+      end
     end
 
     # ---- window controls -------------------------------------------------
@@ -98,7 +128,8 @@ module BotOps
     CONTROL_Y = 9
     CONTROLS = [[:minimize, 1470], [:toggle_fullscreen, 1488], [:quit, 1506]].freeze
 
-    # [[action, x, y, size], ...]: each icon's box in window coordinates.
+    # [[action, x, y, size], ...]: each icon's box in window coordinates,
+    # at the top edge whether windowed or fullscreen.
     def window_controls
       dx = @width - Layout::WIDTH
       CONTROLS.map { |action, x| [action, dx + x, CONTROL_Y, CONTROL_SIZE] }
@@ -153,19 +184,28 @@ module BotOps
     def draw_sidebar
       x = Layout::SIDEBAR_X
       w = Layout::SIDEBAR_W
+      h = Layout.content_h(@height)
       @c.group(x, Layout::CONTENT_Y) do
-        @c.rect(0, 0, w, Layout.content_h(@height), curve: 8, fill: col(PANEL))
-        electric_frame(0, 0, w, Layout.content_h(@height), curve: 8)
-        Layout::NAV.each_with_index do |(key, name, glyph), i|
-          y = 6 + i * 62
+        frame(0, 0, w, h, curve: 10)
+        Layout::NAV.each_with_index do |(key, name, icon_name), i|
+          y = 8 + i * 68
           active = @store.page == key
           if active
-            @c.rect(4, y, w - 8, 58, curve: 6, fill: col(CYAN, 0.1), stroke: col(CYAN, 0.6))
+            @c.glow(6, y, w - 12, 60, curve: 9, blur: 14, color: col(BOLT, 0.55))
+            grad_rect(6, y, w - 12, 60, col("#2F74F5"), col("#163FAE"), curve: 9)
+            @c.rect(6, y, w - 12, 60, curve: 9, stroke: col(tint(CYAN, 0.3), 0.8))
+            fade_line(14, w - 14, y + 0.5, "#FFFFFF", alpha: 0.6, peak: 0.5)
           end
-          txt(glyph, 4, y + 12, size: 15, color: active ? CYAN : MUTED, width: w - 8, align: :center)
-          txt(name, 4, y + 36, size: 8, color: active ? CYAN : MUTED, width: w - 8, align: :center)
-          @c.hit(4, y, w - 8, 58) { show_page(key) }
+          icon(icon_name, w / 2.0, y + 21, 20, col(active ? "#FFFFFF" : "#DCE6FA", active ? 1 : 0.9))
+          txt(name, 0, y + 37, size: 10.5, color: active ? "#FFFFFF" : "#C3D0EE", weight: :medium, width: w, align: :center)
+          @c.hit(6, y, w - 12, 60) { show_page(key) }
         end
+        # A trace of light up the lower edge, like a circuit lit from below.
+        bx = 10
+        [[col(CYAN, 0.18), 5], [col(CYAN, 0.9), 1.6]].each do |c, sw|
+          @c.polyline([[bx, h - 14], [bx, h - 60], [w * 0.62, h - 130]], stroke: c, strokewidth: sw, round: true)
+        end
+        fade_vline(bx, h - 200, h - 14, CYAN, alpha: 0.5, peak: 0.85)
       end
     end
 
@@ -174,7 +214,9 @@ module BotOps
     def place(name, title, geom, opts = {})
       x, y, w, h = geom
       body_h = h - Layout::PANEL_TITLE_H
-      panel(x - Layout::CONTENT_X, y - Layout::CONTENT_Y, w, h, opts.merge(title: title)) do
+      opts = opts.merge(title: title, icon: PANEL_ICONS[name])
+      opts.delete(:page) if opts[:page] == @store.page
+      panel(x - Layout::CONTENT_X, y - Layout::CONTENT_Y, w, h, opts) do
         send("draw_#{name}_body", w, body_h)
       end
     end
@@ -187,11 +229,11 @@ module BotOps
       half = (cw - Layout::GAP) / 2
       case key
       when :sessions
-        place(:sessions, "CLAUDE SESSIONS", [cx, cy, half, ch], right: "#{@store.sessions.size} live · #{@store.recent_sessions.size} earlier")
+        place(:sessions, "CLAUDE SESSIONS", [cx, cy, half, ch], right: sessions_count)
         place(:detail, "SESSION DETAILS", [cx + half + Layout::GAP, cy, half, 300])
         place(:prompts, "RECENT PROMPTS", [cx + half + Layout::GAP, cy + 312, half, ch - 312])
       when :projects
-        place(:projects, "PROJECTS · 24H", [cx, cy, cw, ch], right: "#{@store.projects.size} active", right_color: TEAL)
+        place(:projects, "PROJECTS · 24H", [cx, cy, cw, ch], right: "#{@store.projects.size} active")
       when :tools
         place(:tools, "TOOL CALLS", [cx, cy, cw, ch])
       when :usage
@@ -200,7 +242,7 @@ module BotOps
       when :logs
         place(:log, "EVENT LOG", [cx, cy, cw, ch], right: "prompts · tools · errors")
       when :machines
-        place(:health, "SYSTEM HEALTH · #{health_machine&.dig('host')}", [cx, cy, half, 300])
+        place(:health, "SYSTEM HEALTH", [cx, cy, half, 300], host: health_machine&.dig("host"))
         place(:machines, "MACHINES", [cx + half + Layout::GAP, cy, half, 300])
         place(:live, "LIVE ACTIVITY", [cx, cy + 312, cw, ch - 312])
       when :settings
@@ -214,18 +256,26 @@ module BotOps
       Layout.fit(rect, @width, @height)
     end
 
-    def draw_overview
-      place(:sessions, "CLAUDE SESSIONS",  fit(Layout::FLEET), right: "#{@store.sessions.size} live · #{@store.recent_sessions.size} earlier")
-      place(:live,     "LIVE ACTIVITY",    fit(Layout::ACTIVITY))
-      place(:projects, "PROJECTS · 24H",   fit(Layout::WORKFLOWS), right: "#{@store.projects.size} active", right_color: TEAL)
-      place(:tools,    "TOOL CALLS", fit(Layout::QUEUE))
-      place(:usage,    "USAGE",            fit(Layout::PIPELINE))
-      place(:health,   "SYSTEM HEALTH · #{health_machine&.dig('host')}", fit(Layout::HEALTH))
-      place(:prompts,  "RECENT PROMPTS",   fit(Layout::RECENT))
-      place(:detail,   "SESSION DETAILS",  fit(Layout::AGENT))
-      place(:log,      "EVENT LOG",        fit(Layout::LOGS))
-      place(:machines, "MACHINES",         fit(Layout::REPORTS), right: "#{@store.online_machines.size} online")
+    def sessions_count
+      "#{@store.sessions.size} live · #{@store.recent_sessions.size} earlier"
     end
+
+    def draw_overview
+      place(:sessions, "CLAUDE SESSIONS",  fit(Layout::FLEET), right: sessions_count, page: :sessions)
+      place(:live,     "LIVE ACTIVITY",    fit(Layout::ACTIVITY))
+      place(:projects, "PROJECTS · 24H",   fit(Layout::WORKFLOWS), right: "#{@store.projects.size} active", page: :projects)
+      place(:tools,    "TOOL CALLS",       fit(Layout::QUEUE), page: :tools)
+      place(:usage,    "USAGE",            fit(Layout::PIPELINE), page: :usage)
+      place(:health,   "SYSTEM HEALTH",    fit(Layout::HEALTH), host: health_machine&.dig("host"))
+      place(:prompts,  "RECENT PROMPTS",   fit(Layout::RECENT), page: :sessions)
+      place(:detail,   "SESSION DETAILS",  fit(Layout::AGENT))
+      place(:log,      "EVENT LOG",        fit(Layout::LOGS), page: :logs)
+      place(:machines, "MACHINES",         fit(Layout::REPORTS), right: "#{@store.online_machines.size} online", page: :machines)
+    end
+
+    PANEL_ICONS = { sessions: "bot", live: "square-activity", projects: "folder-git-2", tools: "wrench", usage: "chart-line",
+                    health: "cpu", prompts: "message-square-text", detail: "info", log: "scroll-text", machines: "server",
+                    settings: "settings" }.freeze
 
     # ---- interactions --------------------------------------------------
 
@@ -242,6 +292,22 @@ module BotOps
 
     def set_tool_filter(key)
       @store.tool_filter = key
+      @host.invalidate
+    end
+
+    # Header stats, left to right: live sessions, busy, prompts, tool calls,
+    # output tokens.
+    def stat_overlay(index)
+      view_overlay([:sessions, :sessions, :prompts, :tools, :tokens][index] || :sessions)
+    end
+
+    def set_chart_range(range)
+      @store.chart_range = range
+      @host.invalidate
+    end
+
+    def toggle_series(key)
+      @store.toggle_series(key)
       @host.invalidate
     end
 
@@ -296,6 +362,69 @@ module BotOps
       true
     end
 
+    KEY_ESC, KEY_UP, KEY_DOWN, KEY_ENTER, KEY_BACKSPACE = 27, 38, 40, 13, 8
+
+    # Keys, in this order of who gets them: the search box, an open overlay
+    # (arrows scroll it), then the sessions list (Up/Down select, Enter opens
+    # the timeline). True when something used the key.
+    def key(code)
+      o = @store.overlay
+      return escape if code == KEY_ESC
+      if o&.search?
+        results = @store.search(o.query)
+        case code
+        when KEY_BACKSPACE then o.query = o.query[0...-1]; o.selected = 0
+        when KEY_UP then o.selected = [o.selected - 1, 0].max
+        when KEY_DOWN then o.selected = [o.selected + 1, [results.size - 1, 0].max].min
+        when KEY_ENTER then results[o.selected] ? open_overlay(event_overlay(results[o.selected])) : nil
+        else return false
+        end
+      elsif o
+        case code
+        when KEY_UP then o.scroll_by(-1)
+        when KEY_DOWN then o.scroll_by(1)
+        else return false
+        end
+      else
+        case code
+        when KEY_UP, KEY_DOWN then move_selection(code == KEY_UP ? -1 : 1)
+        when KEY_ENTER then (s = @store.selected_session) ? open_overlay(timeline_overlay(s)) : nil
+        else return false
+        end
+      end
+      @host.invalidate
+      true
+    end
+
+    # Typed text: the query while searching; "/" opens the search box.
+    def text(str)
+      o = @store.overlay
+      if o&.search?
+        clean = str.gsub(/[[:cntrl:]]/, "")
+        return false if clean.empty?
+        o.query << clean
+        o.selected = 0
+      elsif o.nil? && str.include?("/")
+        open_overlay(SearchOverlay.new)
+      else
+        return false
+      end
+      @host.invalidate
+      true
+    end
+
+    def move_selection(by)
+      list = @store.all_sessions
+      return if list.empty?
+      i = list.index { |s| s["id"] == @store.selected_session&.dig("id") } || 0
+      @store.selected_session_id = list[(i + by).clamp(0, list.size - 1)]["id"]
+    end
+
+    def toggle_session_only
+      @store.session_only = !@store.session_only
+      @host.invalidate
+    end
+
     OVERLAY_TEXT = 10
     OVERLAY_LINE = 16
 
@@ -315,11 +444,21 @@ module BotOps
       bh = [[h - 200, 780].min, 320].max
       bx = (w - bw) / 2
       by = (h - bh) / 2
-      @c.rect(bx, by, bw, bh, curve: 9, fill: col(PANEL))
-      electric_frame(bx, by, bw, bh, curve: 9)
+      # Glow first, then the box's own dark fill over it, then the outline:
+      # a glow drawn after the fill would tint the whole box blue.
+      @c.glow(bx, by, bw, bh, curve: 10, blur: 22, color: col(BORDER, 0.35))
+      @c.rect(bx, by, bw, bh, curve: 10, fill: col(OVERLAY_BG))
+      frame(bx, by, bw, bh, curve: 10, glow: 0, fill: false)
       @c.hit(bx, by, bw, bh) {}
 
-      @c.clip(bx + 16, by + 8, bw - 72, 44) do
+      tabs_w = 0
+      if (t = o.tabs)
+        tabs_w = t[:labels].size * 52
+        t[:labels].each_with_index do |label, i|
+          tab(bx + bw - 56 - tabs_w + i * 52, by + 16, label, label == t[:active], width: 46) { open_overlay(t[:select].call(label)) }
+        end
+      end
+      @c.clip(bx + 16, by + 8, bw - 72 - tabs_w, 44) do
         txt(clip(o.title, (bw - 90) / 8), bx + 22, by + 14, size: 13, color: TEXT, weight: :bold)
         txt(clip(o.subtitle, (bw - 60) / 5.5), bx + 22, by + 36, size: 9, color: MUTED) if o.subtitle
       end
@@ -328,6 +467,8 @@ module BotOps
       @c.line(cx + 12, by + 16, cx, by + 28, stroke: col(MUTED), strokewidth: 1.5)
       @c.hit(cx - 6, by + 10, 24, 24) { close_overlay }
       fade_line(bx + 14, bx + bw - 14, by + 56, BOLT)
+
+      return draw_search(o, bx, by, bw, bh) if o.search?
 
       top = by + 68
       body_h = bh - 68 - 30
@@ -378,9 +519,42 @@ module BotOps
       txt(hints.join("  ·  "), bx + 24, by + bh - 18, size: 8, color: DIM)
     end
 
+    # The search box and its results, inside the overlay frame.
+    def draw_search(o, bx, by, bw, bh)
+      top = by + 68
+      @c.rect(bx + 20, top - 4, bw - 40, 28, curve: 6, fill: col(PANEL2), stroke: col(BOLT, 0.8))
+      cursor = (Time.now.to_f * 2).to_i.even? ? "▏" : " "
+      @c.clip(bx + 24, top - 4, bw - 48, 28) do
+        txt(o.query.empty? ? "Type to search…" : o.query + cursor, bx + 32, top + 2, size: 11,
+            color: o.query.empty? ? DIM : TEXT, mono: true)
+      end
+      results = @store.search(o.query)
+      o.selected = o.selected.clamp(0, [results.size - 1, 0].max)
+      list_top = top + 36
+      rows = (bh - (list_top - by) - 30) / OVERLAY_LINE
+      first = [o.selected - rows + 1, 0].max
+      @c.clip(bx + 16, list_top - 2, bw - 32, rows * OVERLAY_LINE + 4) do
+        results[first, rows].to_a.each_with_index do |e, i|
+          y = list_top + i * OVERLAY_LINE
+          if first + i == o.selected
+            @c.rect(bx + 18, y - 2, bw - 36, OVERLAY_LINE, curve: 3, fill: col(BOLT, 0.18))
+          end
+          kind = e["kind"] == "tool" ? e["title"] : e["kind"]
+          line = "#{Time.at(e['at'].to_f).strftime('%H:%M')}  #{kind.to_s.ljust(10)[0, 10]}  #{e['session'].to_s[0, 28].ljust(28)}  #{e['detail']}"
+          txt(line, bx + 24, y, size: OVERLAY_TEXT, color: e["kind"] == "error" ? RED : TEXT, mono: true)
+          @c.hit(bx + 18, y - 2, bw - 36, OVERLAY_LINE) { open_overlay(event_overlay(e)) }
+        end
+      end
+      status = if o.query.strip.empty? then "Search words must all appear (case-insensitive)."
+               elsif results.empty? then "No matches."
+               else "#{results.size}#{results.size == 200 ? '+' : ''} matches  ·  Up/Down to choose, Enter or click to open"
+               end
+      txt("#{status}  ·  Esc closes", bx + 24, by + bh - 18, size: 8, color: DIM)
+    end
+
     # The overlay's body, where a drag pans the text ([x, y, w, h]), or nil.
     def pan_region
-      return nil unless @store.overlay
+      return nil if @store.overlay.nil? || @store.overlay.search?
       w, h = @width, @height
       bw = [[w - 260, 1040].min, 560].max
       bh = [[h - 200, 780].min, 320].max

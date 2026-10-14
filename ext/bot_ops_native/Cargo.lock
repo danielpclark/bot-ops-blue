@@ -2020,12 +2020,24 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rutie"
-version = "0.13.1"
+version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30d1529470ad0b69b81a6d0224632d00c01b46ef671452e24407512165b7ed84"
+checksum = "6517f7cec549a68e81525252a4088420659c7e46109a5f1f9d3204b656e3ee65"
 dependencies = [
  "lazy_static",
  "libc",
+ "rutie-derive",
+]
+
+[[package]]
+name = "rutie-derive"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2639fa56c00a98f1f4010bd779a12ee4c3c8348ce6ee2ab705c76009bb0f724"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

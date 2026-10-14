@@ -56,6 +56,21 @@ class CloudFeedTest < Minitest::Test
     assert_equal 1, File.readlines(@log).size, "replay rewrites the log without stale events"
   end
 
+  def test_token_counts_become_cloud_usage_rows
+    hour = (@now.to_i / 3600) * 3600
+    @feed.ingest(ev("PostToolUse", "tool_name" => "Bash", "usage" => [[hour, "claude-opus-5-5", 100, 4, 200, 20]],
+                                   "tokens" => { "out" => 100 }, "context" => 224))
+    @feed.ingest(ev("Stop", "usage" => [[hour, "claude-opus-5-5", 90, 4, 200, 20]])) # an earlier hook finishing late
+    snap = @feed.snapshot
+    tokens = snap["usage"].find { |r| r[2] == "claude-opus-5-5" }
+    assert_equal [hour, "tern", "claude-opus-5-5", "cloud", 100, 4, 200, 20, 0, 0, 0], tokens
+    assert_equal [hour, "tern", "", "cloud", 0, 0, 0, 0, 1, 0, 0], snap["usage"].find { |r| r[2] == "" }
+    assert_equal 100, snap["hourly"].sum { |r| r[1] }
+    assert_equal [100, 224], snap["sessions"].first.values_at("tokens", "context").then { |t, c| [t["out"], c] }
+    store = BotOps::Store.new.apply(type: "snapshot", snapshot: snap, local: false)
+    assert_equal 100, store.token_breakdown(24)[:by_client]["claude.ai"]["out"]
+  end
+
   def test_rejects_things_that_are_not_hook_events
     refute @feed.ingest({ "hello" => "world" })
     refute @feed.any?
@@ -69,7 +84,7 @@ class CloudFeedTest < Minitest::Test
     assert_includes store.machines.map { |m| m["host"] }, "claude.ai"
     c = BotOps::Scene.new(store, BotOps::PreviewHost.new).build
     assert_includes c.texts, "tern · Cloud"
-    assert_includes c.texts, "SYSTEM HEALTH · laptop", "health stays on a real machine"
+    assert_includes c.texts, "· laptop", "health stays on a real machine"
   end
 end
 
@@ -159,6 +174,42 @@ class CloudReporterTest < Minitest::Test
       File.open(transcript, "a") { |f| f.puts JSON.generate("type" => "ai-title", "aiTitle" => "Newer generated title") }
       assert_equal "Renamed by hand", fire.call["title"], "a hand-given title wins over later generated ones"
       refute fire.call.key?("transcript_path"), "the transcript path itself is not sent"
+    ensure
+      c&.stop
+    end
+  end
+
+  def test_reporter_sends_token_usage_from_the_transcript_and_its_subagents
+    skip "python3 not installed" unless system("python3", "-c", "1", out: File::NULL, err: File::NULL)
+    @now = Time.now.to_f
+    Dir.mktmpdir do |home|
+      transcript = File.join(home, "abc.jsonl")
+      sub = File.join(home, "abc", "subagents")
+      FileUtils.mkdir_p(sub)
+      stamp = Time.at(@now).utc.iso8601(3)
+      reply = lambda do |id, model, out|
+        JSON.generate("type" => "assistant", "timestamp" => stamp,
+                      "message" => { "id" => id, "model" => model, "content" => [],
+                                     "usage" => { "input_tokens" => 2, "output_tokens" => out, "cache_read_input_tokens" => 100,
+                                                  "cache_creation_input_tokens" => 10 } }) + "\n"
+      end
+      File.write(transcript, reply.("m1", "claude-opus-5-5", 40) + reply.("m1", "claude-opus-5-5", 40) + reply.("m2", "claude-opus-5-5", 60))
+      File.write(File.join(sub, "agent-a.jsonl"), reply.("m3", "claude-haiku-4-5", 5))
+      got = Queue.new
+      c = BotOps::Collector.new("127.0.0.1:0", TOKEN, on_event: ->(e) { got << e; true }) { |_| }.start
+      env = { "HOME" => home, "BOT_OPS_URL" => "http://#{c.address}", "BOT_OPS_TOKEN" => TOKEN, "CLAUDE_CODE_REMOTE" => "true" }
+      fire = -> { run_hook({ "session_id" => "s1", "hook_event_name" => "Stop", "transcript_path" => transcript }, env); got.pop(timeout: 5) }
+      hour = (@now.to_i / 3600) * 3600
+      e = fire.call
+      assert_equal [[hour, "claude-haiku-4-5", 5, 2, 100, 10], [hour, "claude-opus-5-5", 100, 4, 200, 20]], e["usage"].sort,
+                   "one count per message, subagents included"
+      assert_equal({ "out" => 105, "in" => 6, "cache_read" => 300, "cache_write" => 30 }, e["tokens"])
+      assert_equal 112, e["context"], "the main transcript's latest turn"
+
+      File.open(transcript, "a") { |f| f.write(reply.("m4", "claude-opus-5-5", 7)) }
+      e = fire.call
+      assert_equal [[hour, "claude-opus-5-5", 107, 6, 300, 30]], e["usage"], "running totals for the hours that changed"
+      assert_nil fire.call["usage"], "nothing new, nothing sent"
     ensure
       c&.stop
     end

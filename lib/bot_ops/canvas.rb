@@ -54,16 +54,50 @@ module BotOps
       @cmds << Cmd.new(:wedge, [@ox + cx, @oy + cy, r, start_deg, sweep_deg, fill])
     end
 
-    # Filled region between a polyline and a horizontal baseline (chart areas).
-    def area(points, base_y, fill:)
+    # Filled region between a polyline and a horizontal baseline (chart
+    # areas). With `fade` it runs from `fill` at y = top_y to `fade` at the
+    # baseline.
+    def area(points, base_y, fill:, fade: nil, top_y: nil)
       pts = points.map { |(x, y)| [@ox + x, @oy + y] }
-      @cmds << Cmd.new(:area, [pts, @oy + base_y, fill])
+      args = [pts, @oy + base_y, fill]
+      args += [fade, @oy + (top_y || points.map(&:last).min)] if fade
+      @cmds << Cmd.new(:area, args)
     end
 
-    # Stroked line through points; closed: true joins the last to the first.
-    def polyline(points, stroke:, strokewidth: 1, closed: false)
+    # Stroked line through points; closed: true joins the last to the first;
+    # round: true rounds its ends and sharp corners (icons).
+    def polyline(points, stroke:, strokewidth: 1, closed: false, round: false)
       pts = points.map { |(x, y)| [(@ox + x).round(2), (@oy + y).round(2)] }
-      @cmds << Cmd.new(:polyline, [pts, stroke, strokewidth, closed])
+      @cmds << Cmd.new(:polyline, [pts, stroke, strokewidth, closed, round])
+    end
+
+    # A convex polygon filled with a linear gradient, `from` colour at
+    # (x1, y1) to `to` at (x2, y2). A polygon that isn't convex but is
+    # star-shaped around some point can be filled by passing it as `center`.
+    def gradient(points, x1, y1, x2, y2, from:, to:, center: nil)
+      pts = points.map { |(x, y)| [(@ox + x).round(2), (@oy + y).round(2)] }
+      args = [pts, [@ox + x1, @oy + y1, @ox + x2, @oy + y2], from, to]
+      args << [(@ox + center[0]).round(2), (@oy + center[1]).round(2)] if center
+      @cmds << Cmd.new(:gradient, args)
+    end
+
+    # A soft glow around a rounded rectangle (blur: how far it fades out).
+    def glow(x, y, w, h, color:, curve: 0, blur: 12, spread: 0)
+      @cmds << Cmd.new(:glow, [@ox + x, @oy + y, w, h, curve, blur, spread, color])
+    end
+
+    # Outline of a rounded rectangle, clockwise, for #gradient.
+    def self.rounded_rect(x, y, w, h, r, steps: 6)
+      r = [[r, w / 2.0, h / 2.0].min, 0].max
+      return [[x, y], [x + w, y], [x + w, y + h], [x, y + h]] if r.zero?
+      [[x + w - r, y + r, -90], [x + w - r, y + h - r, 0], [x + r, y + h - r, 90], [x + r, y + r, 180]].flat_map do |cx, cy, a0|
+        (0..steps).map { |i| a = (a0 + 90.0 * i / steps) * Math::PI / 180; [cx + r * Math.cos(a), cy + r * Math.sin(a)] }
+      end
+    end
+
+    def self.circle_points(cx, cy, r, steps: nil)
+      steps ||= [[(r * 1.6).round, 24].max, 72].min
+      (0...steps).map { |i| a = 2 * Math::PI * i / steps; [cx + r * Math.cos(a), cy + r * Math.sin(a)] }
     end
 
     # Draws the block's commands clipped to x, y, w, h: nothing in it shows
@@ -109,13 +143,15 @@ module BotOps
 
     # ---- frame export for the native host ----------------------------------
 
-    OPS = { rect: "r", circle: "c", line: "l", wedge: "w", area: "a", text: "t", image: "i", polyline: "p", clip: "k", unclip: "K" }.freeze
+    OPS = { rect: "r", circle: "c", line: "l", wedge: "w", area: "a", text: "t", image: "i", polyline: "p", clip: "k",
+            unclip: "K", gradient: "g", glow: "s" }.freeze
 
     # Compact JSON understood by ext/bot_ops_native (see src/lib.rs).
     # drag: the region that moves the window; resize: the grip that resizes
     # it; pan: where a drag pans the content (an open overlay's body).
-    def to_frame(drag: nil, resize: nil, pan: nil)
+    def to_frame(drag: nil, resize: nil, pan: nil, badge: 0)
       {
+        "badge" => badge,
         "cmds" => @cmds.map { |c| [OPS[c.op]] + encode_args(c) },
         "hits" => @hits.each_with_index.map { |h, i| [h.x, h.y, h.w, h.h, i] },
         "drag" => drag,
@@ -124,15 +160,19 @@ module BotOps
       }
     end
 
-    def to_json(drag: nil, resize: nil, pan: nil)
-      JSON.generate(to_frame(drag: drag, resize: resize, pan: pan))
+    def to_json(drag: nil, resize: nil, pan: nil, badge: 0)
+      JSON.generate(to_frame(drag: drag, resize: resize, pan: pan, badge: badge))
     end
 
     # ---- SVG export (tests, previews) -------------------------------------
 
+    SVG_FONTS = { sans: "Inter, sans-serif", mono: "DejaVu Sans Mono, monospace", display: "Montserrat, sans-serif" }.freeze
+    SVG_WEIGHTS = { normal: 400, medium: 500, semibold: 600, bold: 700 }.freeze
+
     def to_svg
-      out = +%(<svg xmlns="http://www.w3.org/2000/svg" width="#{@width}" height="#{@height}" font-family="DejaVu Sans, sans-serif">)
+      out = +%(<svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" width="#{@width}" height="#{@height}" font-family="Inter, sans-serif">)
       clips = 0
+      defs = 0
       @cmds.each do |c|
         case c.op
         when :clip
@@ -157,13 +197,31 @@ module BotOps
           large = sweep.abs > 180 ? 1 : 0
           out << %(<path d="M #{cx} #{cy} L #{cx + r * Math.cos(r1)} #{cy + r * Math.sin(r1)} A #{r} #{r} 0 #{large} 1 #{cx + r * Math.cos(r2)} #{cy + r * Math.sin(r2)} Z" fill="#{svg_c(f)}"/>)
         when :area
-          pts, base, f = c.a
+          pts, base, f, fade, top = c.a
           poly = [[pts.first[0], base]] + pts + [[pts.last[0], base]]
-          out << %(<polygon points="#{poly.map { |p| p.join(',') }.join(' ')}" fill="#{svg_c(f)}"/>)
+          fill = svg_c(f)
+          if fade
+            defs += 1
+            out << svg_gradient("g#{defs}", 0, top, 0, base, f, fade)
+            fill = "url(#g#{defs})"
+          end
+          out << %(<polygon points="#{poly.map { |p| p.join(',') }.join(' ')}" fill="#{fill}"/>)
         when :polyline
-          pts, s, sw, closed = c.a
+          pts, s, sw, closed, round = c.a
           tag = closed ? "polygon" : "polyline"
-          out << %(<#{tag} points="#{pts.map { |p| p.join(',') }.join(' ')}" fill="none" stroke="#{svg_c(s)}" stroke-width="#{sw}" stroke-linejoin="round"/>)
+          cap = round ? %( stroke-linecap="round") : ""
+          out << %(<#{tag} points="#{pts.map { |p| p.join(',') }.join(' ')}" fill="none" stroke="#{svg_c(s)}" stroke-width="#{sw}" stroke-linejoin="round"#{cap}/>)
+        when :gradient
+          pts, (x1, y1, x2, y2), from, to = c.a
+          defs += 1
+          out << svg_gradient("g#{defs}", x1, y1, x2, y2, from, to)
+          out << %(<polygon points="#{pts.map { |p| p.join(',') }.join(' ')}" fill="url(#g#{defs})"/>)
+        when :glow
+          x, y, w, h, r, blur, spread, color = c.a
+          defs += 1
+          out << %(<filter id="b#{defs}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="#{blur / 2.0}"/></filter>)
+          out << %(<rect x="#{x - spread}" y="#{y - spread}" width="#{w + spread * 2}" height="#{h + spread * 2}" rx="#{r + spread}" ) +
+                 %(fill="#{svg_c(color)}" filter="url(#b#{defs})"/>)
         when :image
           name, cx, cy, r = c.a
           path = File.join(IMAGE_DIR, "#{name}.png")
@@ -178,9 +236,10 @@ module BotOps
           tx = x
           tx += width / 2.0 if align == :center && width
           tx += width if align == :right && width
-          fam = family == :mono ? "DejaVu Sans Mono, monospace" : "DejaVu Sans, sans-serif"
+          fam = SVG_FONTS[family] || SVG_FONTS[:sans]
           esc = str.gsub("&", "&amp;").gsub("<", "&lt;").gsub(">", "&gt;")
-          out << %(<text x="#{tx}" y="#{y + size}" font-size="#{size}" fill="#{svg_c(color)}" font-weight="#{weight}" text-anchor="#{anchor}" letter-spacing="#{kerning}" font-family="#{fam}">#{esc}</text>)
+          wt = family == :display ? 800 : SVG_WEIGHTS[weight] || 400
+          out << %(<text x="#{tx}" y="#{y + size * 0.93}" font-size="#{size}" fill="#{svg_c(color)}" font-weight="#{wt}" text-anchor="#{anchor}" letter-spacing="#{kerning}" font-family="#{fam}" style="white-space:pre">#{esc}</text>)
         end
       end
       out << "</svg>"
@@ -194,6 +253,11 @@ module BotOps
       when :text then a[0, 5] + [a[5].to_s, a[6].to_s, a[7], a[8].to_s, a[9]]
       else a
       end
+    end
+
+    def svg_gradient(id, x1, y1, x2, y2, from, to)
+      %(<linearGradient id="#{id}" gradientUnits="userSpaceOnUse" x1="#{x1}" y1="#{y1}" x2="#{x2}" y2="#{y2}">) +
+        %(<stop offset="0" stop-color="#{svg_c(from)}"/><stop offset="1" stop-color="#{svg_c(to)}"/></linearGradient>)
     end
 
     def svg_c(c)

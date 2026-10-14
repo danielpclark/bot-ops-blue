@@ -12,7 +12,7 @@ module BotOps
     attr_reader :store, :channel, :scene
 
     def initialize(store: nil, channel: nil)
-      @store = store || Store.new
+      @store = store || Store.new(history: History.new, prefs: Prefs.new)
       @channel = channel || Comms::ClaudeChannel.new
       @scene = Scene.new(@store, self)
       @canvas = nil
@@ -110,7 +110,9 @@ module BotOps
       return "" unless @dirty
       @dirty = false
       @canvas = @scene.build
-      @canvas.to_json(drag: [0, 0, @scene.width, Layout::HEADER_H], resize: @scene.resize_grip, pan: @scene.pan_region)
+      notify_waiting
+      @canvas.to_json(drag: [0, 0, @scene.width, Layout::HEADER_H], resize: @scene.resize_grip, pan: @scene.pan_region,
+                      badge: @store.attention_count)
     end
 
     # The window's size in points changed (fullscreen, resize); lay out again.
@@ -172,9 +174,35 @@ module BotOps
     end
 
     # A key the native side offers to Ruby first; "handled" when it was used
-    # (27 = Esc closes an open overlay before Esc leaves fullscreen).
+    # (27 Esc closes what's open before Esc leaves fullscreen; 38/40 Up/Down,
+    # 13 Enter, 8 Backspace).
     def key(code)
-      code.to_i == 27 && @scene.escape ? "handled" : ""
+      return "" unless @scene.key(code.to_i)
+      @dirty = true
+      "handled"
+    end
+
+    # Typed text ("/" opens search; while searching, it's the query).
+    def text(str)
+      @dirty = true if @scene.text(str.to_s)
+      nil
+    end
+
+    # A macOS notification when another session starts waiting on the
+    # person, if turned on in Settings. Off by default: a notification posted
+    # from a script opens Script Editor when clicked.
+    def notify_waiting
+      waiting = @store.sessions.select { |s| s["attention"] }
+      ids = waiting.map { |s| s["id"] }
+      fresh = waiting.reject { |s| Array(@notified).include?(s["id"]) }
+      @notified = ids
+      return if fresh.empty? || !@store.notifications? || RUBY_PLATFORM !~ /darwin/
+      s = fresh.first
+      message = "#{Store.display_name(s)} needs you#{fresh.size > 1 ? " (+#{fresh.size - 1} more)" : ''}"
+      script = "display notification #{message.to_s[0, 200].inspect} with title \"Bot Ops Blue\""
+      Process.detach(Process.spawn("osascript", "-e", script, out: File::NULL, err: File::NULL))
+    rescue SystemCallError
+      nil
     end
 
     # The native side opens it in the default browser (claude.ai links only).
@@ -202,6 +230,6 @@ module BotOps
       @channel.name
     end
 
-    logged :poll, :hit, :resize, :fullscreen_changed, :scroll, :key, :mono_advance, :pan
+    logged :poll, :hit, :resize, :fullscreen_changed, :scroll, :key, :mono_advance, :pan, :text
   end
 end

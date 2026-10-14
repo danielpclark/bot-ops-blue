@@ -69,7 +69,39 @@ up and down, and Esc, its X or a click outside closes it. Full text (a tool's wh
 prompt, an error) is kept for this machine's sessions only; other machines
 and cloud sessions send short excerpts.
 
-In fullscreen macOS slides its menu bar over the top edge, so use the keys:
+More of the dashboard opens a breakdown the same way:
+
+- **Header stats and the Usage tiles:**
+  - Output tokens: by model, project, hour and session, with input and cache tokens and the cache-hit ratio.
+  - Tool calls: by tool, with error rate, median and slowest duration.
+  - Prompts: by project.
+  - Live sessions: every session.
+- **The usage chart:**
+  - Click a column for that hour's or day's breakdown.
+  - Click a legend entry to hide or show its line.
+  - Pick 12h, 24h, 7d or 30d. The range and hidden lines are remembered in `~/.config/bot-ops-blue/prefs.json`.
+- **A project card:** its sessions, branches, output by model and the files edited most.
+- **Timeline** (in Session Details): the selected session's prompts, tool calls with durations, and errors in order. Session Details also shows the context against the model's window, yellow from 80% and red from 95%.
+
+Keys: **/** searches prompts, tool calls and events; **Up/Down** move
+through sessions (or the search results); **Enter** opens the selected
+session's timeline (or the search result); **Esc** closes what's open.
+"this session only", in the Tool Calls and Event Log title bars, narrows
+them to the selected session.
+
+When a session waits on you (a permission prompt, with the hook installed),
+the Dock icon shows how many are waiting and bounces once. A macOS
+notification can be turned on in Settings; it's off by default because a
+script-posted notification opens Script Editor when clicked.
+
+Hourly usage from every source is saved to
+`~/.config/bot-ops-blue/history.json` for 30 days, so the 7d and 30d ranges
+include cloud sessions and other machines, which report only their last
+24 hours. This machine's own transcripts are read back 7 days at startup.
+
+In fullscreen macOS slides its menu bar over the top edge once the pointer
+rests there, and a click under it goes to the menu bar rather than to the
+window controls beneath; move the pointer away and back, or use the keys:
 **Esc** leaves fullscreen, **F11** or **Ctrl+Cmd+F** toggles it.
 
 The layout stretches to the window: the content is zoomed until the
@@ -186,19 +218,51 @@ closes. While it runs, Rust calls two methods on `host`:
 | --- | --- |
 | `host.poll` | JSON frame (`cmds`, `hits`, `drag`) when something changed, else `""` |
 | `host.hit(id)` | A window command for hit region `id`: `"quit"`, `"fullscreen:toggle"`, `"decorations:toggle"`, or `""` |
+| `host.key(code)` | `"handled"` when Ruby used the key (27 Esc, 38/40 Up/Down, 13 Enter, 8 Backspace), else `""` |
+| `host.text(str)` | Typed text (`/` opens search; while searching, it's the query) |
+
+A frame's `badge` is the number of sessions waiting on the person; Rust
+shows it on the Dock icon and bounces the icon when it goes up.
 
 Rust handles the drag region (the header) natively, draws the frame, and
 executes the window commands. Everything else, including the two-second
 refresh tick, lives in Ruby (`BotOps::NativeHost`).
 
+### Look, fonts and icons
+
+Panels are drawn from a few primitives the native side renders with egui:
+
+- gradient fills (convex shapes whose vertex colours follow the gradient, with an anti-aliased edge)
+- soft glows (egui's blurred shadow shape)
+- fading chart areas
+- lines with round ends
+
+Edge highlights are gradients that peak in one place and fade to nothing toward the corners.
+
+- **Text:** [Inter](https://github.com/rsms/inter), with [Montserrat](https://github.com/JulietaUla/Montserrat) ExtraBold for the title. Both are under the SIL Open Font License (`ext/bot_ops_native/fonts/*-LICENSE.txt`). DejaVu Sans Mono is used for code, with DejaVu Sans as a fallback for symbols.
+  - `lib/bot_ops/font_metrics.rb` holds each font's character widths, so Ruby can truncate and place text by its real width.
+  - Regenerate it with `bundle exec rake metrics` after changing a font.
+- **Icons:** [Lucide](https://lucide.dev) (ISC license), flattened to polylines in `lib/bot_ops/icons.rb`. The Visual Studio Code mark comes from [Simple Icons](https://simpleicons.org) (CC0); the logo is a Microsoft trademark.
+  - Regenerate with `bundle exec rake icons`. This needs the network; the generated file is committed.
+
+To check what the window really draws without screen-recording permission, start the app with `BOT_OPS_SNAPSHOT_DIR` set to a folder. Creating `request` in that folder makes the window save its own frame there as `window.png`.
+
 ### Why Rutie, and which version
 
 The extension is bound with [Rutie](https://github.com/danielpclark/rutie).
 Rutie releases track Ruby's special-constant layout, so the version has to
-match the Ruby in use: `rutie = "0.13"` for Ruby 3.x (what `Cargo.toml`
-pins), `0.14` for Ruby 4.0. Using 0.9 with Ruby 3 segfaults the first time a
-`nil` crosses the boundary, which is why the host protocol only exchanges
-strings and integers.
+match the Ruby in use: `rutie = "0.13.3"` for Ruby 3.2 to 3.4 (what
+`Cargo.toml` pins), `0.14` for Ruby 4.0. Using 0.9 with Ruby 3 segfaults the
+first time a `nil` crosses the boundary, which is why the host protocol only
+exchanges strings and integers.
+
+The binding uses Rutie's `derive` feature: `BotOps::Native` is a
+`#[rubymodule]` whose `run` is an ordinary Rust function with typed
+parameters, so a wrong argument raises `TypeError` in Ruby instead of being
+silently defaulted. The window loop runs under `Thread::call_without_gvl`;
+0.13.2 fixed that call freeing its unblock function after Ruby's first
+interrupt (the crate used to call `rb_thread_call_without_gvl` itself to
+avoid the crash).
 
 ## Adding comms
 
@@ -246,3 +310,32 @@ Supported event types (see `Store#apply`):
 - **Windows**: build from a shell where `cargo` and `ruby` are on `PATH`
   (RubyInstaller + rustup). The DLL is installed as `bot_ops_native.so`,
   which is the extension Ruby expects there.
+- **macOS, fullscreen on a second display**: until the window loses and
+  regains focus, winit reports clicks in screen coordinates (the events
+  arrive without a window), so every click missed by the display's offset
+  and the header controls seemed dead. The native host places each press by
+  AppKit's own cursor location instead; `BOT_OPS_DEBUG=1` logs both when
+  they disagree.
+
+## Contributing
+
+Pull requests are triaged by an AI reviewer before a person reads them, so
+the description has to carry everything needed to judge the change without
+running it:
+
+- **Before and after screenshots** for anything visible, cropped to the
+  panel or control that changed, taken from the real window rather than
+  the SVG preview (the preview understates egui's glow and blends). Start
+  the dashboard with `env BOT_OPS_SNAPSHOT_DIR=/some/dir bundle exec rake run`,
+  then `touch /some/dir/request`: the window writes its current frame to
+  `/some/dir/window.png`.
+- **Full details of the change**: what was wrong or missing, what the
+  change does and why that approach, every file touched and why, and what
+  you checked (`rake test`, `rake preview`, the window itself, on which
+  monitor and at what size).
+- One change per pull request, with a commit message that gives the reason,
+  not just the what.
+
+A PR without the screenshots or the details is sent back for them before
+review.
+

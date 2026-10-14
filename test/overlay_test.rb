@@ -37,6 +37,16 @@ class OverlayTest < Minitest::Test
     assert(texts.any? { |t| t.include?("Esc, X or a click outside closes") })
   end
 
+  def test_the_box_is_dark_with_nothing_drawn_over_its_fill
+    click_text("bundle exec rake test")
+    cmds = @scene.build.cmds
+    bx, by, bw, bh = overlay_box
+    fill = cmds.rindex { |c| c.op == :rect && c.a[0, 4] == [bx, by, bw, bh] && c.a[4] }
+    refute_nil fill
+    assert_equal BotOps::Theme.hex_rgb(BotOps::Theme::OVERLAY_BG) + [1.0], cmds[fill].a[4]
+    assert(cmds[fill..].none? { |c| c.op == :glow && c.a[2] > bw / 2 }, "no glow on top of the box")
+  end
+
   def test_x_and_a_click_outside_close_it_but_a_click_inside_does_not
     click_text("bundle exec rake test")
     bx, by, bw, bh = overlay_box

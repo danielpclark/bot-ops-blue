@@ -12,7 +12,7 @@ module BotOps
   class Overlay
     Section = Struct.new(:kind, :label, :text)
 
-    attr_reader :title, :subtitle, :sections
+    attr_reader :title, :subtitle, :sections, :tabs
     attr_accessor :offset, :x_offset
 
     def initialize(title, subtitle: nil)
@@ -21,6 +21,13 @@ module BotOps
       @sections = []
       @offset = 0
       @x_offset = 0.0
+    end
+
+    # Tabs in the header, such as time ranges: `labels`, the `active` one,
+    # and a block that returns the overlay to show for a label.
+    def tabs!(labels, active, &select)
+      @tabs = { labels: labels, active: active, select: select }
+      self
     end
 
     def field(label, value)
@@ -64,6 +71,10 @@ module BotOps
       line[0] == :field ? line[3] + line[2].length : line[1].to_s.length
     end
 
+    def search?
+      false
+    end
+
     def scroll_by(lines)
       @offset = [@offset + lines, 0].max
     end
@@ -86,6 +97,22 @@ module BotOps
           lines << word.dup
         end
       end
+    end
+  end
+
+  # The "/" search box: a query typed into it filters events, tool calls and
+  # prompts; Up/Down move the highlighted result, Enter or a click opens it.
+  class SearchOverlay < Overlay
+    attr_accessor :query, :selected
+
+    def initialize
+      super("Search", subtitle: "Prompts, tool calls, errors and events from the last 24 hours")
+      @query = +""
+      @selected = 0
+    end
+
+    def search?
+      true
     end
   end
 end

@@ -63,15 +63,16 @@ module BotOps
       [left, top, right - left, bottom - top]
     end
 
+    # [page, label, icon (an ICONS name)]
     NAV = [
-      [:overview,  "Overview",  "⌂"],
-      [:sessions,  "Sessions",  "◉"],
-      [:projects,  "Projects",  "⬡"],
-      [:tools,     "Tools",     "☰"],
-      [:usage,     "Usage",     "▤"],
-      [:logs,      "Logs",      "≡"],
-      [:machines,  "Machines",  "⌁"],
-      [:settings,  "Settings",  "⚙"]
+      [:overview,  "Overview",  "house"],
+      [:sessions,  "Sessions",  "circle-dot"],
+      [:projects,  "Projects",  "hexagon"],
+      [:tools,     "Tools",     "wrench"],
+      [:usage,     "Usage",     "chart-no-axes-column"],
+      [:logs,      "Logs",      "scroll-text"],
+      [:machines,  "Machines",  "server"],
+      [:settings,  "Settings",  "settings"]
     ].freeze
   end
 end

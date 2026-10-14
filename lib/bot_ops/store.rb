@@ -22,10 +22,14 @@ module BotOps
       shell: %w[Bash BashOutput KillShell Monitor]
     }.freeze
 
-    attr_accessor :page, :activity_tab, :tool_filter, :selected_session_id, :overlay
+    attr_accessor :page, :activity_tab, :tool_filter, :selected_session_id, :overlay, :session_only
     attr_reader :collector_status, :probe_error, :version
 
-    def initialize
+    # history: a History to record usage into (charts beyond 24h); prefs: a
+    # Prefs (or any Hash-like) for chart range, hidden series, notifications.
+    def initialize(history: nil, prefs: nil)
+      @history = history
+      @prefs = prefs || Prefs::DEFAULTS.dup
       @machines = {}
       @page = :overview
       @activity_tab = :all
@@ -47,6 +51,7 @@ module BotOps
         return self unless snap.is_a?(Hash) && snap["host"].is_a?(String)
         key = snap["user"].is_a?(String) && !snap["user"].empty? ? "#{snap['user']}@#{snap['host']}" : snap["host"]
         @machines[key] = { "snapshot" => snap, "received_at" => ev[:at] || Time.now, "local" => ev[:local] ? true : false }
+        @history&.record(key, Store.usage_rows(snap))
         @probe_error = nil if ev[:local]
       when "collector" then @collector_status = ev[:status].to_s
       when "probe.error" then @probe_error = ev[:message].to_s
@@ -184,7 +189,27 @@ module BotOps
       events.select { |e| e["kind"] == "tool" || e["kind"] == "error" }
     end
 
+    # Events every term of `query` appears in (case-insensitive), newest first.
+    def search(query, limit = 200)
+      terms = query.to_s.downcase.split
+      return [] if terms.empty?
+      events.select do |e|
+        haystack = [e["title"], e["detail"], e["full"], e["session"], e["project"], e["kind"]].join(" ").downcase
+        terms.all? { |t| haystack.include?(t) }
+      end.first(limit)
+    end
+
+    # Events for the Event Log: everything, or only the selected session's.
+    def visible_events
+      @session_only && selected_session ? events.select { |e| e["sid"] == selected_session["id"] } : events
+    end
+
     def visible_tools
+      return visible_tools_unscoped unless @session_only && selected_session
+      visible_tools_unscoped.select { |e| e["sid"] == selected_session["id"] }
+    end
+
+    def visible_tools_unscoped
       case @tool_filter
       when :errors then tool_events.select { |e| e["kind"] == "error" }
       when :edits, :shell then tool_events.select { |e| TOOL_GROUPS[@tool_filter].include?(e["title"]) }
@@ -202,17 +227,54 @@ module BotOps
 
     # ---- usage -------------------------------------------------------------
 
-    # Last +hours+ hourly buckets summed over all machines:
+    # A snapshot's usage rows: [hour, project, model, client, out, in,
+    # cache_read, cache_write, tools, prompts, errors]. Agents from before the
+    # client column are padded; snapshots without usage are read from their
+    # 24h "hourly" table.
+    def self.usage_rows(snap)
+      if snap["usage"].is_a?(Array)
+        return snap["usage"].map { |r| r.size == 10 ? r.dup.insert(3, "") : r }
+      end
+      Array(snap["hourly"]).map { |hour, out, tools, prompts, errors| [hour, "", "", "", out.to_i, 0, 0, 0, tools.to_i, prompts.to_i, errors.to_i] }
+    end
+
+    # Positions in a usage row as Store#usage returns it (source first).
+    U = %i[source hour project model client out in cache_read cache_write tools prompts errors]
+        .each_with_index.to_h.freeze
+
+    def self.current_hour(now = Time.now)
+      (now.to_i / 3600) * 3600
+    end
+
+    # [[source, hour, project, model, client, out, in, cache_read,
+    # cache_write, tools, prompts, errors], ...] for the last `hours` hours,
+    # every source.
+    def usage(hours = 24)
+      cached([:usage, hours]) do
+        since = Store.current_hour - (hours - 1) * 3600
+        if @history
+          @history.rows(since)
+        else
+          @machines.flat_map do |key, m|
+            Store.usage_rows(m["snapshot"]).select { |r| r[0].to_i >= since }.map { |r| [key, *r] }
+          end
+        end
+      end
+    end
+
+    # Last +hours+ hourly buckets summed over all sources:
     # [[hour_epoch, out_tokens, tool_calls, prompts, errors], ...] oldest first.
     def hourly(hours = 24)
       cached([:hourly, hours]) do
         sums = Hash.new { |h, k| h[k] = [0, 0, 0, 0] }
-        @machines.each_value do |m|
-          Array(m["snapshot"]["hourly"]).each do |hour, *vals|
-            vals.each_with_index { |v, i| sums[hour][i] += v.to_i }
-          end
+        usage(hours).each do |_, hour, _, _, _, out, _, _, _, tools, prompts, errors|
+          row = sums[hour]
+          row[0] += out
+          row[1] += tools
+          row[2] += prompts
+          row[3] += errors
         end
-        last = sums.keys.max || (Time.now.to_i / 3600) * 3600
+        last = Store.current_hour
         (0...hours).map { |i| h = last - (hours - 1 - i) * 3600; [h, *sums[h]] }
       end
     end
@@ -223,6 +285,107 @@ module BotOps
         { out_tokens: rows.sum { |r| r[1] }, tool_calls: rows.sum { |r| r[2] },
           prompts: rows.sum { |r| r[3] }, errors: rows.sum { |r| r[4] } }
       end
+    end
+
+    # ---- drill-downs -------------------------------------------------------
+
+    TOKEN_KINDS = %w[out in cache_read cache_write].freeze
+
+    CLIENT_NAMES = { "cli" => "CLI", "claude-vscode" => "VS Code", "cloud" => "claude.ai", "claude-desktop" => "Desktop",
+                     "sdk-cli" => "SDK", "sdk-ts" => "SDK", "sdk-py" => "SDK" }.freeze
+
+    def self.client_name(entrypoint)
+      CLIENT_NAMES[entrypoint] || (entrypoint.to_s.empty? ? "(unknown)" : entrypoint)
+    end
+
+    # Tokens over the last `hours`: totals per kind, and every kind grouped
+    # by client, project, model and hour (by day past two days); sessions by
+    # their own totals.
+    def token_breakdown(hours = 24)
+      cached([:tokens, hours]) do
+        totals = Hash.new(0)
+        by = Hash.new { |h, dim| h[dim] = Hash.new { |g, k| g[k] = Hash.new(0) } }
+        step = hours > 48 ? 86_400 : 3600
+        usage(hours).each do |_, hour, project, model, client, *counts|
+          TOKEN_KINDS.each_with_index do |kind, i|
+            n = counts[i].to_i
+            next if n.zero?
+            totals[kind] += n
+            by[:client][Store.client_name(client)][kind] += n
+            by[:project][project.empty? ? "(unknown)" : project][kind] += n
+            by[:model][model.empty? ? "(unknown)" : model][kind] += n
+            by[:period][Time.at(hour).then { |t| step == 3600 ? hour : Time.local(t.year, t.month, t.day).to_i }][kind] += n
+          end
+        end
+        reads = totals["cache_read"]
+        prompt_side = totals["in"] + totals["cache_read"] + totals["cache_write"]
+        sessions = all_sessions.filter_map do |s|
+          t = s["tokens"] || {}
+          [Store.display_name(s), t] if t.values.any? { |v| v.to_i.positive? }
+        end.sort_by { |_, t| -t["out"].to_i }
+        { totals: totals, by_client: by[:client], by_project: by[:project], by_model: by[:model], by_period: by[:period],
+          period: step, by_session: sessions,
+          cache_hit: prompt_side.positive? ? reads.to_f / prompt_side : nil }
+      end
+    end
+
+    # Tools that wait for the person rather than run, so their "duration" is
+    # thinking time, not slowness.
+    WAITS_ON_YOU = %w[AskUserQuestion ExitPlanMode].freeze
+
+    # Per tool over the event window: calls, failures, median and slowest
+    # duration (from each call to its result, where known).
+    def tool_stats
+      cached(:tool_stats) do
+        calls = events.select { |e| e["kind"] == "tool" }
+        failed = events.select { |e| e["kind"] == "error" && e["tool"] }.map { |e| e["tool"] }.tally
+        calls.group_by { |e| e["title"].to_s }.map do |tool, list|
+          durations = list.filter_map { |e| e["duration"] }.sort
+          { tool: tool, calls: list.size, errors: [failed[tool].to_i, list.count { |e| e["failed"] }].max,
+            median: durations.empty? ? nil : durations[durations.size / 2], max: durations.last,
+            waits: WAITS_ON_YOU.include?(tool) }
+        end.sort_by { |t| -t[:calls] }
+      end
+    end
+
+    # The slowest tool calls that actually ran (not ones waiting on you).
+    def slowest_tools(n = 10)
+      events.select { |e| e["kind"] == "tool" && e["duration"] && !WAITS_ON_YOU.include?(e["title"]) }
+            .max_by(n) { |e| e["duration"] }
+    end
+
+    def prompts_by_project
+      cached(:prompts_by_project) { prompts.group_by { |e| e["project"].to_s }.sort_by { |_, l| -l.size } }
+    end
+
+    # ---- preferences ---------------------------------------------------------
+
+    CHART_RANGES = { "12h" => 12, "24h" => 24, "7d" => 168, "30d" => 720 }.freeze
+
+    def chart_range
+      CHART_RANGES.key?(@prefs["chart_range"]) ? @prefs["chart_range"] : "12h"
+    end
+
+    def chart_range=(range)
+      return unless CHART_RANGES.key?(range)
+      @prefs["chart_range"] = range
+      @cache = {}
+    end
+
+    def hidden_series
+      Array(@prefs["hidden_series"])
+    end
+
+    def toggle_series(name)
+      @prefs["hidden_series"] = hidden_series.include?(name) ? hidden_series - [name] : hidden_series + [name]
+    end
+
+    def notifications?
+      @prefs["notifications"] ? true : false
+    end
+
+    def notifications=(on)
+      @prefs["notifications"] = on ? true : false
     end
 
     # Projects with activity in the last 24h on any machine, most recent first.
@@ -237,15 +400,15 @@ module BotOps
     def stats
       t = totals
       [
-        Stat.new("LIVE SESSIONS",   sessions.size.to_s, "+#{recent_sessions.size} earlier", Theme::MUTED),
+        Stat.new("LIVE SESSIONS",   sessions.size.to_s, "+#{recent_sessions.size} earlier", recent_sessions.empty? ? Theme::MUTED : Theme::GREEN),
         if attention_count.positive?
           Stat.new("BUSY NOW", busy_count.to_s, "#{attention_count} need you", Theme::YELLOW)
         else
           Stat.new("BUSY NOW", busy_count.to_s, "#{sessions.size - busy_count} idle", Theme::MUTED)
         end,
-        Stat.new("PROMPTS (24H)",   Store.count(t[:prompts]), "#{projects.size} projects", Theme::MUTED),
-        Stat.new("TOOL CALLS (24H)", Store.count(t[:tool_calls]), "#{t[:errors]} errors", t[:errors].positive? ? Theme::RED : Theme::MUTED),
-        Stat.new("OUTPUT TOKENS",   Store.count(t[:out_tokens]), "24h", Theme::MUTED)
+        Stat.new("PROMPTS (24H)",   Store.count(t[:prompts]), "#{projects.size} project#{'s' unless projects.size == 1}", Theme::CYAN),
+        Stat.new("TOOL CALLS (24H)", Store.count(t[:tool_calls]), "#{t[:errors]} error#{'s' unless t[:errors] == 1}", t[:errors].positive? ? Theme::RED : Theme::MUTED),
+        Stat.new("OUTPUT TOKENS",   Store.count(t[:out_tokens]), "24h", Theme::CYAN)
       ]
     end
 
@@ -269,12 +432,22 @@ module BotOps
       format("%dd %dh", m / 1440, (m % 1440) / 60)
     end
 
+    # The context window a session is working against: Claude Haiku 4.5 has
+    # 200k, the current models 1M. A context already past the guess means the
+    # guess was wrong, so the next size up is used.
+    def self.context_window(model, context = 0)
+      window = model.to_s.include?("haiku-4") ? 200_000 : 1_000_000
+      window = 1_000_000 if context.to_i > window
+      window
+    end
+
     # 950, 12.4k, 3.1M
     def self.count(n)
       n = n.to_i
       return n.to_s if n < 1000
       return format("%.1fk", n / 1000.0).sub(".0k", "k") if n < 1_000_000
-      format("%.1fM", n / 1_000_000.0).sub(".0M", "M")
+      return format("%.1fM", n / 1_000_000.0).sub(".0M", "M") if n < 999_950_000
+      format("%.1fB", n / 1_000_000_000.0).sub(".0B", "B")
     end
 
     # "claude-opus-5-5" -> "Opus 5.5"
