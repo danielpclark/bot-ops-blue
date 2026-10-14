@@ -339,3 +339,25 @@ running it:
 A PR without the screenshots or the details is sent back for them before
 review.
 
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in the work by you, as defined in the Apache-2.0
+license, shall be dual licensed as below, without any additional terms or
+conditions.
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
+  http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or
+  http://opensource.org/licenses/MIT)
+
+at your option.
+
+Bundled third-party work keeps its own license: the Inter and Montserrat
+fonts (SIL Open Font License) and the DejaVu fonts (Bitstream Vera
+license), all with their notices in `ext/bot_ops_native/fonts/`; the
+Lucide icons (ISC) and the Visual Studio Code mark from Simple Icons
+(CC0), both in `lib/bot_ops/icons.rb`.
+
