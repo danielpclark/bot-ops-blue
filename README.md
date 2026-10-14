@@ -10,6 +10,9 @@ plus a sidebar that switches between full-size pages for each area.
 
 Nothing on screen is simulated. Panels with no data show an empty state.
 
+The window itself, fullscreen on a 2560x1440 monitor (its own snapshot, see
+`BOT_OPS_SNAPSHOT_DIR` below):
+
 ![Bot Ops Blue running](assets/preview.png)
 
 ## Setup
@@ -211,7 +214,7 @@ repaints cost nothing on the Ruby side.
 
 ### The Ruby <-> Rust protocol
 
-`BotOps::Native.run(host, width, height, title)` blocks until the window
+`BotOps::Native.run(host, width, height, title, position)` blocks until the window
 closes. While it runs, Rust calls two methods on `host`:
 
 | Call | Returns |
@@ -286,7 +289,7 @@ class SocketChannel < BotOps::Comms::Channel
 end
 ```
 
-Then boot the hub with it in `bot_ops_blue.rb`:
+Then boot the dashboard with it in `bot_ops_blue.rb`:
 
 ```ruby
 channel = BotOps::Comms::Multiplexer.new(SocketChannel.new, BotOps::Comms::ClaudeChannel.new)

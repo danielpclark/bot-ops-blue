@@ -4,11 +4,11 @@ require "thread"
 
 module BotOps
   module Comms
-    # Base class for anything that feeds events into the hub.
+    # Base class for anything that feeds events into the dashboard.
     #
-    # Shoes (like most GUI toolkits) wants all drawing on its main thread, so
-    # channels never touch the store themselves. They enqueue event hashes and
-    # the hub drains them with #poll from a Shoes timer.
+    # The window and the store live on the main thread, so channels never
+    # touch the store themselves. They enqueue event hashes and the host
+    # drains them from its refresh tick.
     #
     # To add real comms later, subclass Channel, start a background thread (or
     # socket reader) in #start, and call #push(event) for each message:
