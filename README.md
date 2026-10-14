@@ -10,6 +10,9 @@ plus a sidebar that switches between full-size pages for each area.
 
 Nothing on screen is simulated. Panels with no data show an empty state.
 
+The window itself, fullscreen on a 2560x1440 monitor (its own snapshot, see
+`BOT_OPS_SNAPSHOT_DIR` below):
+
 ![Bot Ops Blue running](assets/preview.png)
 
 ## Setup
@@ -211,7 +214,7 @@ repaints cost nothing on the Ruby side.
 
 ### The Ruby <-> Rust protocol
 
-`BotOps::Native.run(host, width, height, title)` blocks until the window
+`BotOps::Native.run(host, width, height, title, position)` blocks until the window
 closes. While it runs, Rust calls two methods on `host`:
 
 | Call | Returns |
@@ -286,7 +289,7 @@ class SocketChannel < BotOps::Comms::Channel
 end
 ```
 
-Then boot the hub with it in `bot_ops_blue.rb`:
+Then boot the dashboard with it in `bot_ops_blue.rb`:
 
 ```ruby
 channel = BotOps::Comms::Multiplexer.new(SocketChannel.new, BotOps::Comms::ClaudeChannel.new)
@@ -338,4 +341,26 @@ running it:
 
 A PR without the screenshots or the details is sent back for them before
 review.
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in the work by you, as defined in the Apache-2.0
+license, shall be dual licensed as below, without any additional terms or
+conditions.
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
+  http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or
+  http://opensource.org/licenses/MIT)
+
+at your option.
+
+Bundled third-party work keeps its own license: the Inter and Montserrat
+fonts (SIL Open Font License) and the DejaVu fonts (Bitstream Vera
+license), all with their notices in `ext/bot_ops_native/fonts/`; the
+Lucide icons (ISC) and the Visual Studio Code mark from Simple Icons
+(CC0), both in `lib/bot_ops/icons.rb`.
 

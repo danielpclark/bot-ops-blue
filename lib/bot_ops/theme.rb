@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
 module BotOps
-  # Colour palette and typography for the hub. Hex strings are accepted
-  # directly by Shoes 3 for stroke/fill; use Theme.rgba for translucent colours.
+  # Colour palette and typography. Colours are "#RRGGBB" hex strings; use
+  # Theme.rgba for translucent ones.
   module Theme
     # Accents are sampled from assets/bot-blue.png (the logo): the royal
     # armour blues, the glowing cyan eyes, ice-white plating and the gold
