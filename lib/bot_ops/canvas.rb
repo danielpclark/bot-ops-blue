@@ -122,6 +122,12 @@ module BotOps
       @hits << Hit.new(@ox + x, @oy + y, w, h, handler)
     end
 
+    # A region over the whole window, whatever group is open: a menu closes
+    # on a click anywhere else, so it adds this before its own regions.
+    def hit_everywhere(&handler)
+      @hits << Hit.new(0, 0, @width, @height, handler)
+    end
+
     def hit_at(x, y)
       @hits.reverse.find { |h| x >= h.x && x < h.x + h.w && y >= h.y && y < h.y + h.h }
     end
@@ -149,9 +155,10 @@ module BotOps
     # Compact JSON understood by ext/bot_ops_native (see src/lib.rs).
     # drag: the region that moves the window; resize: the grip that resizes
     # it; pan: where a drag pans the content (an open overlay's body).
-    def to_frame(drag: nil, resize: nil, pan: nil, badge: 0)
+    def to_frame(drag: nil, resize: nil, pan: nil, badge: 0, bg: nil)
       {
         "badge" => badge,
+        "bg" => bg,
         "cmds" => @cmds.map { |c| [OPS[c.op]] + encode_args(c) },
         "hits" => @hits.each_with_index.map { |h, i| [h.x, h.y, h.w, h.h, i] },
         "drag" => drag,
@@ -160,8 +167,8 @@ module BotOps
       }
     end
 
-    def to_json(drag: nil, resize: nil, pan: nil, badge: 0)
-      JSON.generate(to_frame(drag: drag, resize: resize, pan: pan, badge: badge))
+    def to_json(drag: nil, resize: nil, pan: nil, badge: 0, bg: nil)
+      JSON.generate(to_frame(drag: drag, resize: resize, pan: pan, badge: badge, bg: bg))
     end
 
     # ---- SVG export (tests, previews) -------------------------------------

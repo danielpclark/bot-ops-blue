@@ -191,6 +191,7 @@ bot_ops_blue.rb             entry point
 bin/bot-ops-agent           reports another machine to the dashboard
 cloud/                      cloud reporter, its setup script, hook settings, ngrok policy
 docs/                       guides (cloud sessions)
+themes/                     colour themes, one YAML file each (standard-blue.yml is the default)
 lib/bot_ops/
   store.rb                  all dashboard state + Store#apply(event)
   probe.rb                  reads this machine's Claude Code sessions + health
@@ -199,9 +200,10 @@ lib/bot_ops/
   comms.rb                  Channel interface, Multiplexer, ClaudeChannel
   display.rb                picks the monitor the window opens on
   scene.rb                  builds a frame from the Store; handles clicks
+  theme.rb                  loads themes/<slug>.yml; every colour comes from the one in use
   panels.rb, widgets.rb     drawing of each panel, on top of Canvas
   canvas.rb                 toolkit-independent display list (+ JSON, + SVG)
-  layout.rb, theme.rb       geometry and palette
+  layout.rb                 geometry
   native_host.rb            Ruby side of the Ruby <-> Rust protocol
 ext/bot_ops_native/         Rust crate: egui window, renderer, Rutie binding
 ```
@@ -219,17 +221,50 @@ closes. While it runs, Rust calls two methods on `host`:
 
 | Call | Returns |
 | --- | --- |
-| `host.poll` | JSON frame (`cmds`, `hits`, `drag`) when something changed, else `""` |
+| `host.poll` | JSON frame (`cmds`, `hits`, `drag`, `bg`) when something changed, else `""` |
 | `host.hit(id)` | A window command for hit region `id`: `"quit"`, `"fullscreen:toggle"`, `"decorations:toggle"`, or `""` |
 | `host.key(code)` | `"handled"` when Ruby used the key (27 Esc, 38/40 Up/Down, 13 Enter, 8 Backspace), else `""` |
 | `host.text(str)` | Typed text (`/` opens search; while searching, it's the query) |
 
 A frame's `badge` is the number of sessions waiting on the person; Rust
-shows it on the Dock icon and bounces the icon when it goes up.
+shows it on the Dock icon and bounces the icon when it goes up. Its `bg` is
+the theme's window background, which Rust fills before drawing.
 
 Rust handles the drag region (the header) natively, draws the frame, and
 executes the window commands. Everything else, including the two-second
 refresh tick, lives in Ruby (`BotOps::NativeHost`).
+
+### Themes
+
+Every colour the dashboard draws comes from a theme file, so the look can
+be changed without touching the code. `themes/standard-blue.yml` is the
+default, **Standard Blue**, and the fallback for anything another theme
+leaves out. Pick a theme from the drop-down on the **Settings** page; the
+choice is kept in `~/.config/bot-ops-blue/prefs.json`. `BOT_OPS_THEME=<slug>`
+overrides it for one run (`rake run` and `rake preview` both honour it).
+
+A theme is one YAML file, `themes/<slug>.yml` in the checkout or
+`~/.config/bot-ops-blue/themes/<slug>.yml` outside it, with a `name:` and
+`colors:` (the palette, surfaces and text, plus named roles such as the
+sidebar's active button), a `series:` list for charts, and the tables
+`status`, `priority`, `levels`, `tools`, `kinds` and `usage` that colour
+sessions, log lines, tool calls, event-log entries and the usage chart's
+lines. Any value is `"#RRGGBB"` or the name of another colour, so a theme
+can swap one hue in one place. Only the keys Standard Blue defines are
+accepted; a malformed file is reported on stderr and the previous theme
+stays. Once a theme has images of its own, they will live in a folder named
+after it (`themes/<slug>/`).
+
+To make one, start from a scratch copy of Standard Blue:
+
+```sh
+bundle exec rake theme:custom      # writes themes/custom.yml (git ignores it)
+```
+
+Pick **Custom** on the Settings page and edit the file while the dashboard
+runs: it reloads the theme as you save. Standard Blue itself is never
+edited, so it always survives. When the look is done, save the file as
+`themes/<name>.yml` with its own `name:`.
 
 ### Look, fonts and icons
 
@@ -338,6 +373,8 @@ running it:
   monitor and at what size).
 - One change per pull request, with a commit message that gives the reason,
   not just the what.
+- Colour, icon and image experiments go in a Custom theme (see Themes),
+  never in `themes/standard-blue.yml`. A new look is a new theme file.
 
 A PR without the screenshots or the details is sent back for them before
 review.

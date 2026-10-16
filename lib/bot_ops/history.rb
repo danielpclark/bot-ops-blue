@@ -91,7 +91,7 @@ module BotOps
   # (~/.config/bot-ops-blue/prefs.json).
   class Prefs
     PATH = File.join(CONFIG_DIR, "prefs.json")
-    DEFAULTS = { "chart_range" => "12h", "hidden_series" => [], "notifications" => false }.freeze
+    DEFAULTS = { "chart_range" => "12h", "hidden_series" => [], "notifications" => false, "theme" => Theme::DEFAULT }.freeze
 
     def initialize(path: PATH)
       @path = path

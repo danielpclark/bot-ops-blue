@@ -6,3 +6,5 @@ Thumbs.db
 /out/
 /ext/bot_ops_native/target/
 /lib/bot_ops/native/
+/themes/custom.yml
+/themes/custom/

@@ -55,6 +55,7 @@ module BotOps
         abort "Bot Ops Blue is already running (pid #{other}); not opening a second window."
       end
       require NATIVE_LIB
+      Theme.use(ENV.fetch("BOT_OPS_THEME", @store.theme))
       @channel.start(@store)
       position = Display.position(Layout::WIDTH, Layout::HEIGHT)
       if position.nil?
@@ -106,13 +107,14 @@ module BotOps
       if Time.now - @last_tick >= Scene::REFRESH_SECONDS
         @last_tick = Time.now
         @dirty = true
+        Theme.reload_if_changed   # a theme file being edited shows up as it is saved
       end
       return "" unless @dirty
       @dirty = false
       @canvas = @scene.build
       notify_waiting
       @canvas.to_json(drag: [0, 0, @scene.width, Layout::HEADER_H], resize: @scene.resize_grip, pan: @scene.pan_region,
-                      badge: @store.attention_count)
+                      badge: @store.attention_count, bg: Theme.hex_rgb(Theme.bg))
     end
 
     # The window's size in points changed (fullscreen, resize); lay out again.
