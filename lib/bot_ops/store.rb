@@ -388,6 +388,16 @@ module BotOps
       @prefs["notifications"] = on ? true : false
     end
 
+    # The selected theme's slug (themes/<slug>.yml); see BotOps::Theme.
+    def theme
+      slug = @prefs["theme"].to_s
+      slug.empty? ? Theme::DEFAULT : slug
+    end
+
+    def theme=(slug)
+      @prefs["theme"] = slug.to_s
+    end
+
     # Projects with activity in the last 24h on any machine, most recent first.
     def projects
       cached(:projects) do
@@ -400,15 +410,15 @@ module BotOps
     def stats
       t = totals
       [
-        Stat.new("LIVE SESSIONS",   sessions.size.to_s, "+#{recent_sessions.size} earlier", recent_sessions.empty? ? Theme::MUTED : Theme::GREEN),
+        Stat.new("LIVE SESSIONS",   sessions.size.to_s, "+#{recent_sessions.size} earlier", recent_sessions.empty? ? Theme.muted : Theme.green),
         if attention_count.positive?
-          Stat.new("BUSY NOW", busy_count.to_s, "#{attention_count} need you", Theme::YELLOW)
+          Stat.new("BUSY NOW", busy_count.to_s, "#{attention_count} need you", Theme.yellow)
         else
-          Stat.new("BUSY NOW", busy_count.to_s, "#{sessions.size - busy_count} idle", Theme::MUTED)
+          Stat.new("BUSY NOW", busy_count.to_s, "#{sessions.size - busy_count} idle", Theme.muted)
         end,
-        Stat.new("PROMPTS (24H)",   Store.count(t[:prompts]), "#{projects.size} project#{'s' unless projects.size == 1}", Theme::CYAN),
-        Stat.new("TOOL CALLS (24H)", Store.count(t[:tool_calls]), "#{t[:errors]} error#{'s' unless t[:errors] == 1}", t[:errors].positive? ? Theme::RED : Theme::MUTED),
-        Stat.new("OUTPUT TOKENS",   Store.count(t[:out_tokens]), "24h", Theme::CYAN)
+        Stat.new("PROMPTS (24H)",   Store.count(t[:prompts]), "#{projects.size} project#{'s' unless projects.size == 1}", Theme.cyan),
+        Stat.new("TOOL CALLS (24H)", Store.count(t[:tool_calls]), "#{t[:errors]} error#{'s' unless t[:errors] == 1}", t[:errors].positive? ? Theme.red : Theme.muted),
+        Stat.new("OUTPUT TOKENS",   Store.count(t[:out_tokens]), "24h", Theme.cyan)
       ]
     end
 

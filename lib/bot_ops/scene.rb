@@ -23,7 +23,32 @@ module BotOps
     def initialize(store, host)
       @store = store
       @host = host
+      @theme_menu = false
       resize(Layout::WIDTH, Layout::HEIGHT)
+    end
+
+    # ---- theme (Settings page) -----------------------------------------
+
+    def theme_menu?
+      @theme_menu
+    end
+
+    def toggle_theme_menu
+      @theme_menu = !@theme_menu
+      @host.invalidate
+    end
+
+    def close_theme_menu
+      @theme_menu = false
+      @host.invalidate
+    end
+
+    # Switches to the theme +slug+ and remembers it in prefs. A theme that
+    # fails to load leaves the current one in place (Theme.use says why).
+    def choose_theme(slug)
+      @store.theme = slug if Theme.use(slug)
+      @theme_menu = false
+      @host.invalidate
     end
 
     # Lays out for a window of +w+ x +h+ points (never below the design size).
@@ -35,7 +60,7 @@ module BotOps
     # Fill a canvas with the current frame.
     def build(canvas = Canvas.new(@width, @height))
       @c = canvas
-      @c.rect(0, 0, @width, @height, fill: col(BG))
+      @c.rect(0, 0, @width, @height, fill: col(theme.bg))
       draw_header
       draw_sidebar
       @c.group(Layout::CONTENT_X, Layout::CONTENT_Y) { draw_page(@store.page) }
@@ -54,20 +79,20 @@ module BotOps
       w = @width
       dx = w - Layout::WIDTH # right-hand header items stay pinned to the right edge
       hh = Layout::HEADER_H
-      grad_rect(0, 0, w, hh, col(BG_TOP, 0.9), col(BG, 0.0))
-      @c.glow(0, hh - 5, w, 2, blur: 14, color: col(BOLT, 0.35))
-      fade_line(0, w, hh - 4, CYAN, alpha: 0.95, width: 2, peak: 0.32)
-      fade_line(0, w, hh - 1, BOLT, alpha: 0.4, width: 1, peak: 0.6)
+      grad_rect(0, 0, w, hh, col(theme.bg_top, 0.9), col(theme.bg, 0.0))
+      @c.glow(0, hh - 5, w, 2, blur: 14, color: col(theme.bolt, 0.35))
+      fade_line(0, w, hh - 4, theme.cyan, alpha: 0.95, width: 2, peak: 0.32)
+      fade_line(0, w, hh - 1, theme.bolt, alpha: 0.4, width: 1, peak: 0.6)
 
       # logo: the bot portrait in a round, glowing frame like a profile photo
-      @c.glow(29, 12, 62, 62, curve: 31, blur: 10, color: col(CYAN, 0.18))
+      @c.glow(29, 12, 62, 62, curve: 31, blur: 10, color: col(theme.cyan, 0.18))
       @c.image_circle("logo", 60, 43, 29)
-      @c.circle(60, 43, 30, stroke: col(CYAN), strokewidth: 2.5)
+      @c.circle(60, 43, 30, stroke: col(theme.cyan), strokewidth: 2.5)
 
       bot = "BOT OPS "
-      txt(bot, 112, 19, size: 25, color: TEXT, font: :display, kerning: 1.5)
-      txt("BLUE", 112 + text_w(bot, 25, font: :display, kerning: 1.5), 19, size: 25, color: CYAN, font: :display, kerning: 1.5)
-      txt("AUTOMATE   /   CREATE   /   SCALE", 114, 55, size: 9.5, color: "#B9C6E6", weight: :medium, kerning: 2.4)
+      txt(bot, 112, 19, size: 25, color: theme.text, font: :display, kerning: 1.5)
+      txt("BLUE", 112 + text_w(bot, 25, font: :display, kerning: 1.5), 19, size: 25, color: theme.cyan, font: :display, kerning: 1.5)
+      txt("AUTOMATE   /   CREATE   /   SCALE", 114, 55, size: 9.5, color: theme.tagline, weight: :medium, kerning: 2.4)
 
       draw_stats(dx)
 
@@ -77,16 +102,16 @@ module BotOps
                elsif online.zero? then "WAITING FOR DATA"
                else "#{online} MACHINE#{'S' unless online == 1} ONLINE"
                end
-      c = ok ? GREEN : (online.zero? ? YELLOW : RED)
+      c = ok ? theme.green : (online.zero? ? theme.yellow : theme.red)
       glow_dot(dx + 1132, 29, col(c), 10)
       txt(status, dx + 1150, 25, size: 12, color: c, weight: :semibold)
-      txt(clock_text, dx + 1150, 47, size: 11, color: TEXT)
-      fade_vline(dx + 1312, 16, hh - 16, CYAN, alpha: 0.45)
-      cloud_symbol(dx + 1336, 37, 26, col("#4DA8FF"), lit: true)
+      txt(clock_text, dx + 1150, 47, size: 11, color: theme.text)
+      fade_vline(dx + 1312, 16, hh - 16, theme.cyan, alpha: 0.45)
+      cloud_symbol(dx + 1336, 37, 26, col(theme.cloud), lit: true)
       status = @store.collector_status.to_s
       first, rest = status.start_with?("Collecting on ") ? ["Collecting on", status.delete_prefix("Collecting on ")] : [status, nil]
-      txt(fit_text(first, 150, 10.5), dx + 1358, 25, size: 10.5, color: MUTED)
-      txt(fit_text(rest, 150, 10.5), dx + 1358, 42, size: 10.5, color: TEXT) if rest
+      txt(fit_text(first, 150, 10.5), dx + 1358, 25, size: 10.5, color: theme.muted)
+      txt(fit_text(rest, 150, 10.5), dx + 1358, 42, size: 10.5, color: theme.text) if rest
       draw_window_controls
     end
 
@@ -101,19 +126,19 @@ module BotOps
       stats.each_with_index do |s, i|
         x = x0 + 14 + slot * i
         tile = 28
-        @c.glow(x, 19, tile, tile, curve: 8, blur: 6, color: col(BOLT, 0.12))
-        grad_rect(x, 19, tile, tile, col("#2D7BFF", 0.9), col("#1640B8", 0.9), curve: 8)
-        icon(STAT_ICONS[i], x + tile / 2.0, 19 + tile / 2.0, 16, col("#FFFFFF"))
+        @c.glow(x, 19, tile, tile, curve: 8, blur: 6, color: col(theme.bolt, 0.12))
+        grad_rect(x, 19, tile, tile, col(theme.stat_tile_top, 0.9), col(theme.stat_tile_bottom, 0.9), curve: 8)
+        icon(STAT_ICONS[i], x + tile / 2.0, 19 + tile / 2.0, 16, col(theme.white))
         tx = x + tile + 9
         avail = slot - tile - 14
         lsize = text_w(s.label, 9.5, :semibold, kerning: 0.3) <= avail ? 9.5 : 8.5
-        txt(fit_text(s.label, avail, lsize, :semibold), tx, 18, size: lsize, color: TEXT, weight: :semibold, kerning: 0.3)
-        txt(s.value, tx, 33, size: 22, color: "#FFFFFF", weight: :bold)
+        txt(fit_text(s.label, avail, lsize, :semibold), tx, 18, size: lsize, color: theme.text, weight: :semibold, kerning: 0.3)
+        txt(s.value, tx, 33, size: 22, color: theme.white, weight: :bold)
         vw = text_w(s.value, 22, :bold)
         note = fit_text(s.note, avail - vw - 8, 10.5, :medium)
         txt(note, tx + vw + 7, 43, size: 10.5, color: s.note_color, weight: :medium) if vw + 30 < avail
         @c.hit(x - 6, 14, slot - 8, hh - 32) { open_overlay(stat_overlay(i)) }
-        fade_vline(x0 + slot * (i + 1) + 4, 20, hh - 24, CYAN, alpha: 0.3) if i < stats.size - 1
+        fade_vline(x0 + slot * (i + 1) + 4, 20, hh - 24, theme.cyan, alpha: 0.3) if i < stats.size - 1
       end
     end
 
@@ -138,7 +163,7 @@ module BotOps
     def draw_window_controls
       pad = (CONTROL_HIT - CONTROL_SIZE) / 2
       window_controls.each do |action, x, y, s|
-        send("icon_#{action}", x, y, s, col(MUTED))
+        send("icon_#{action}", x, y, s, col(theme.muted))
         @c.hit(x - pad, y - pad, CONTROL_HIT, CONTROL_HIT) { @host.send(action) }
       end
     end
@@ -191,21 +216,21 @@ module BotOps
           y = 8 + i * 68
           active = @store.page == key
           if active
-            @c.glow(6, y, w - 12, 60, curve: 9, blur: 14, color: col(BOLT, 0.55))
-            grad_rect(6, y, w - 12, 60, col("#2F74F5"), col("#163FAE"), curve: 9)
-            @c.rect(6, y, w - 12, 60, curve: 9, stroke: col(tint(CYAN, 0.3), 0.8))
-            fade_line(14, w - 14, y + 0.5, "#FFFFFF", alpha: 0.6, peak: 0.5)
+            @c.glow(6, y, w - 12, 60, curve: 9, blur: 14, color: col(theme.bolt, 0.55))
+            grad_rect(6, y, w - 12, 60, col(theme.nav_active_top), col(theme.nav_active_bottom), curve: 9)
+            @c.rect(6, y, w - 12, 60, curve: 9, stroke: col(tint(theme.cyan, 0.3), 0.8))
+            fade_line(14, w - 14, y + 0.5, theme.white, alpha: 0.6, peak: 0.5)
           end
-          icon(icon_name, w / 2.0, y + 21, 20, col(active ? "#FFFFFF" : "#DCE6FA", active ? 1 : 0.9))
-          txt(name, 0, y + 37, size: 10.5, color: active ? "#FFFFFF" : "#C3D0EE", weight: :medium, width: w, align: :center)
+          icon(icon_name, w / 2.0, y + 21, 20, col(active ? theme.white : theme.nav_icon, active ? 1 : 0.9))
+          txt(name, 0, y + 37, size: 10.5, color: active ? theme.white : theme.nav_text, weight: :medium, width: w, align: :center)
           @c.hit(6, y, w - 12, 60) { show_page(key) }
         end
         # A trace of light up the lower edge, like a circuit lit from below.
         bx = 10
-        [[col(CYAN, 0.18), 5], [col(CYAN, 0.9), 1.6]].each do |c, sw|
+        [[col(theme.cyan, 0.18), 5], [col(theme.cyan, 0.9), 1.6]].each do |c, sw|
           @c.polyline([[bx, h - 14], [bx, h - 60], [w * 0.62, h - 130]], stroke: c, strokewidth: sw, round: true)
         end
-        fade_vline(bx, h - 200, h - 14, CYAN, alpha: 0.5, peak: 0.85)
+        fade_vline(bx, h - 200, h - 14, theme.cyan, alpha: 0.5, peak: 0.85)
       end
     end
 
@@ -331,7 +356,7 @@ module BotOps
     def draw_resize_grip
       x, y, = resize_grip
       [4, 8, 12].each do |d|
-        @c.line(x + GRIP - 3, y + GRIP - 3 - d, x + GRIP - 3 - d, y + GRIP - 3, stroke: col(MUTED, 0.7), strokewidth: 1.2)
+        @c.line(x + GRIP - 3, y + GRIP - 3 - d, x + GRIP - 3 - d, y + GRIP - 3, stroke: col(theme.muted, 0.7), strokewidth: 1.2)
       end
     end
 
@@ -357,6 +382,10 @@ module BotOps
 
     # Esc closes an open overlay. True when it did.
     def escape
+      if @theme_menu
+        close_theme_menu
+        return true
+      end
       return false unless @store.overlay
       close_overlay
       true
@@ -437,7 +466,7 @@ module BotOps
     # overflows. A click on the backdrop closes it; clicks inside don't.
     def draw_overlay(o)
       w, h = @width, @height
-      @c.rect(0, 0, w, h, fill: col(BG, 0.78))
+      @c.rect(0, 0, w, h, fill: col(theme.bg, 0.78))
       @c.hit(0, 0, w, h) { close_overlay }
 
       bw = [[w - 260, 1040].min, 560].max
@@ -446,8 +475,8 @@ module BotOps
       by = (h - bh) / 2
       # Glow first, then the box's own dark fill over it, then the outline:
       # a glow drawn after the fill would tint the whole box blue.
-      @c.glow(bx, by, bw, bh, curve: 10, blur: 22, color: col(BORDER, 0.35))
-      @c.rect(bx, by, bw, bh, curve: 10, fill: col(OVERLAY_BG))
+      @c.glow(bx, by, bw, bh, curve: 10, blur: 22, color: col(theme.border, 0.35))
+      @c.rect(bx, by, bw, bh, curve: 10, fill: col(theme.overlay_bg))
       frame(bx, by, bw, bh, curve: 10, glow: 0, fill: false)
       @c.hit(bx, by, bw, bh) {}
 
@@ -459,14 +488,14 @@ module BotOps
         end
       end
       @c.clip(bx + 16, by + 8, bw - 72 - tabs_w, 44) do
-        txt(clip(o.title, (bw - 90) / 8), bx + 22, by + 14, size: 13, color: TEXT, weight: :bold)
-        txt(clip(o.subtitle, (bw - 60) / 5.5), bx + 22, by + 36, size: 9, color: MUTED) if o.subtitle
+        txt(clip(o.title, (bw - 90) / 8), bx + 22, by + 14, size: 13, color: theme.text, weight: :bold)
+        txt(clip(o.subtitle, (bw - 60) / 5.5), bx + 22, by + 36, size: 9, color: theme.muted) if o.subtitle
       end
       cx = bx + bw - 34
-      @c.line(cx, by + 16, cx + 12, by + 28, stroke: col(MUTED), strokewidth: 1.5)
-      @c.line(cx + 12, by + 16, cx, by + 28, stroke: col(MUTED), strokewidth: 1.5)
+      @c.line(cx, by + 16, cx + 12, by + 28, stroke: col(theme.muted), strokewidth: 1.5)
+      @c.line(cx + 12, by + 16, cx, by + 28, stroke: col(theme.muted), strokewidth: 1.5)
       @c.hit(cx - 6, by + 10, 24, 24) { close_overlay }
-      fade_line(bx + 14, bx + bw - 14, by + 56, BOLT)
+      fade_line(bx + 14, bx + bw - 14, by + 56, theme.bolt)
 
       return draw_search(o, bx, by, bw, bh) if o.search?
 
@@ -488,12 +517,12 @@ module BotOps
           y = top + i * OVERLAY_LINE
           case style
           when :field
-            txt(a, left, y, size: OVERLAY_TEXT, color: MUTED, mono: true)
-            txt(b, left + label_w * mono_char, y, size: OVERLAY_TEXT, color: TEXT, mono: true)
-          when :heading then txt(a, left, y, size: OVERLAY_TEXT, color: CYAN, weight: :bold)
-          when :note then txt(a, bx + 24, y, size: OVERLAY_TEXT, color: DIM, mono: true)
+            txt(a, left, y, size: OVERLAY_TEXT, color: theme.muted, mono: true)
+            txt(b, left + label_w * mono_char, y, size: OVERLAY_TEXT, color: theme.text, mono: true)
+          when :heading then txt(a, left, y, size: OVERLAY_TEXT, color: theme.cyan, weight: :bold)
+          when :note then txt(a, bx + 24, y, size: OVERLAY_TEXT, color: theme.dim, mono: true)
           when :blank then nil
-          else txt(a, left, y, size: OVERLAY_TEXT, color: TEXT, mono: true)
+          else txt(a, left, y, size: OVERLAY_TEXT, color: theme.text, mono: true)
           end
         end
       end
@@ -502,31 +531,31 @@ module BotOps
         track_h = body_h - 4
         thumb_h = [track_h * visible / lines.size, 24].max
         thumb_y = top + (track_h - thumb_h) * o.offset / (lines.size - visible).to_f
-        @c.rect(bx + bw - 16, top, 4, track_h, curve: 2, fill: col(TRACK))
-        @c.rect(bx + bw - 16, thumb_y, 4, thumb_h, curve: 2, fill: col(BOLT, 0.9))
+        @c.rect(bx + bw - 16, top, 4, track_h, curve: 2, fill: col(theme.track))
+        @c.rect(bx + bw - 16, thumb_y, 4, thumb_h, curve: 2, fill: col(theme.bolt, 0.9))
       end
       if max_x.positive?
         track_w = bw - 64
         thumb_w = [track_w * view_w / content_w, 24].max
         thumb_x = bx + 24 + (track_w - thumb_w) * o.x_offset / max_x
-        @c.rect(bx + 24, top + body_h + 4, track_w, 4, curve: 2, fill: col(TRACK))
-        @c.rect(thumb_x, top + body_h + 4, thumb_w, 4, curve: 2, fill: col(BOLT, 0.9))
+        @c.rect(bx + 24, top + body_h + 4, track_w, 4, curve: 2, fill: col(theme.track))
+        @c.rect(thumb_x, top + body_h + 4, thumb_w, 4, curve: 2, fill: col(theme.bolt, 0.9))
       end
       hints = []
       hints << "Scroll for more" if lines.size > visible
       hints << "drag or swipe sideways for long lines" if max_x.positive?
       hints << "Esc, X or a click outside closes"
-      txt(hints.join("  ·  "), bx + 24, by + bh - 18, size: 8, color: DIM)
+      txt(hints.join("  ·  "), bx + 24, by + bh - 18, size: 8, color: theme.dim)
     end
 
     # The search box and its results, inside the overlay frame.
     def draw_search(o, bx, by, bw, bh)
       top = by + 68
-      @c.rect(bx + 20, top - 4, bw - 40, 28, curve: 6, fill: col(PANEL2), stroke: col(BOLT, 0.8))
+      @c.rect(bx + 20, top - 4, bw - 40, 28, curve: 6, fill: col(theme.panel2), stroke: col(theme.bolt, 0.8))
       cursor = (Time.now.to_f * 2).to_i.even? ? "▏" : " "
       @c.clip(bx + 24, top - 4, bw - 48, 28) do
         txt(o.query.empty? ? "Type to search…" : o.query + cursor, bx + 32, top + 2, size: 11,
-            color: o.query.empty? ? DIM : TEXT, mono: true)
+            color: o.query.empty? ? theme.dim : theme.text, mono: true)
       end
       results = @store.search(o.query)
       o.selected = o.selected.clamp(0, [results.size - 1, 0].max)
@@ -537,11 +566,11 @@ module BotOps
         results[first, rows].to_a.each_with_index do |e, i|
           y = list_top + i * OVERLAY_LINE
           if first + i == o.selected
-            @c.rect(bx + 18, y - 2, bw - 36, OVERLAY_LINE, curve: 3, fill: col(BOLT, 0.18))
+            @c.rect(bx + 18, y - 2, bw - 36, OVERLAY_LINE, curve: 3, fill: col(theme.bolt, 0.18))
           end
           kind = e["kind"] == "tool" ? e["title"] : e["kind"]
           line = "#{Time.at(e['at'].to_f).strftime('%H:%M')}  #{kind.to_s.ljust(10)[0, 10]}  #{e['session'].to_s[0, 28].ljust(28)}  #{e['detail']}"
-          txt(line, bx + 24, y, size: OVERLAY_TEXT, color: e["kind"] == "error" ? RED : TEXT, mono: true)
+          txt(line, bx + 24, y, size: OVERLAY_TEXT, color: e["kind"] == "error" ? theme.red : theme.text, mono: true)
           @c.hit(bx + 18, y - 2, bw - 36, OVERLAY_LINE) { open_overlay(event_overlay(e)) }
         end
       end
@@ -549,7 +578,7 @@ module BotOps
                elsif results.empty? then "No matches."
                else "#{results.size}#{results.size == 200 ? '+' : ''} matches  ·  Up/Down to choose, Enter or click to open"
                end
-      txt("#{status}  ·  Esc closes", bx + 24, by + bh - 18, size: 8, color: DIM)
+      txt("#{status}  ·  Esc closes", bx + 24, by + bh - 18, size: 8, color: theme.dim)
     end
 
     # The overlay's body, where a drag pans the text ([x, y, w, h]), or nil.

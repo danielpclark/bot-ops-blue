@@ -1,0 +1,128 @@
+# Standard Blue: the dashboard's default theme, and the fallback for any
+# colour another theme leaves out. Leave this file alone. To try colours,
+# make a Custom theme from it (bundle exec rake theme:custom), pick it on
+# the Settings page, and edit themes/custom.yml while the dashboard runs; it
+# reloads the file as you save. When the look is done, save it as its own
+# themes/<name>.yml with its own `name:`.
+#
+# A colour is "#RRGGBB". A value may also name another colour in this file
+# (status: Busy: green), so a theme can change one hue in one place.
+name: Standard Blue
+
+colors:
+  # Backgrounds and surfaces
+  bg: "#040A17"           # window background
+  bg_top: "#071330"       # the background brightens toward the top left
+  panel: "#081429"        # panel fill, bottom of its gradient
+  panel_top: "#0C1D3C"    # panel fill, top of its gradient
+  panel2: "#0C1B36"       # cards inside a panel
+  overlay_bg: "#07131F"   # the details box: dark, so its text stands out
+  card_top: "#10244A"
+  track: "#132A52"        # gauge and bar tracks
+  line: "#16305E"
+  border: "#2457E6"       # panel and card outlines
+
+  # Frame glow (sampled from the logo's electric armour)
+  edge: "#0B3BF0"         # deep electric royal blue: frame glow
+  edge_soft: "#0A2CB8"    # the same, darker, for boxes inside a frame
+  bolt: "#3D82FF"         # bright electric blue: the core of every frame line
+  spark: "#C8F6FF"        # white-hot: hairlines, corners and sparks
+
+  # Accents
+  cyan: "#30C8FC"         # eye glow: the primary accent
+  teal: "#4D9DFF"         # clear azure: the secondary accent
+  blue: "#2F6BFF"         # electric royal blue armour
+  purple: "#8C8CFF"       # blue-violet shadow plating
+  pink: "#B7FCFD"         # white-hot eye core
+  yellow: "#F0B23C"       # gold crest
+  orange: "#C9852E"       # darker crest gold
+  red: "#FF4D6A"
+  green: "#2FDC8A"        # mint (busy, online, healthy)
+  slate: "#6F82B8"        # idle and ended
+  white: "#FFFFFF"        # icon glyphs and the brightest figures
+
+  # Text
+  text: "#E8F0FB"         # ice-white plating
+  text_detail: "#C9D5F0"  # the detail column of event rows
+  muted: "#8EA2CF"
+  subtle: "#5E86D6"       # secondary text on cards (project · client)
+  dim: "#3D5085"
+  tagline: "#B9C6E6"      # AUTOMATE / CREATE / SCALE under the title
+
+  # Header
+  stat_tile_top: "#2D7BFF"     # the header stat icon tiles
+  stat_tile_bottom: "#1640B8"
+  cloud: "#4DA8FF"             # the collector's cloud symbol
+
+  # Sidebar
+  nav_active_top: "#2F74F5"    # the selected page's button
+  nav_active_bottom: "#163FAE"
+  nav_icon: "#DCE6FA"          # other pages' icons
+  nav_text: "#C3D0EE"          # other pages' labels
+
+  # Controls and tiles
+  pill_top: "#3C8BFF"          # a selected pill tab
+  pill_bottom: "#1D5BE0"
+  tile_cyan: "#1E9BEF"         # square icon tiles that would otherwise be cyan
+  tile_green: "#1FB878"        # square icon tiles that would otherwise be green
+  health_busy: "#3D8BFF"       # the Busy gauge in System Health
+
+# Chart series and project cards, in the order they are handed out. Each
+# entry names a colour above or gives a hex.
+series: [cyan, teal, yellow, blue, purple, green, orange]
+
+# Session, task and log colouring. Values name a colour above or give a hex.
+status:
+  Busy: green
+  Needs you: yellow
+  Ended: slate
+  Running: teal
+  Completed: teal
+  Pending: yellow
+  Idle: slate
+  Failed: red
+  Error: red
+  Paused: orange
+  default: muted
+
+priority:
+  High: red
+  Medium: yellow
+  Low: blue
+  default: muted
+
+levels:
+  INFO: cyan
+  WARN: yellow
+  ERROR: red
+  default: muted
+
+# Tool calls, by tool name; "mcp" covers every MCP tool.
+tools:
+  Edit: yellow
+  Write: yellow
+  MultiEdit: yellow
+  NotebookEdit: yellow
+  Read: cyan
+  Grep: cyan
+  Glob: cyan
+  Bash: blue
+  mcp: teal
+  default: purple
+
+# Event-log entries, by kind.
+kinds:
+  prompt: purple
+  tool: teal
+  error: red
+  attention: yellow
+  lifecycle: cyan
+  default: muted
+
+# The usage chart's lines.
+usage:
+  Tool calls: teal
+  Output k-tok: blue
+  Prompts: purple
+  Errors: red
+  default: muted

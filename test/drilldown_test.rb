@@ -137,9 +137,9 @@ class DrilldownTest < Minitest::Test
   def test_context_meter_warns_near_the_window
     s = { "context" => 52_000, "model" => "claude-opus-5-5" }
     assert_equal "52k / 1M · 5%", @scene.context_text(s)
-    assert_equal BotOps::Theme::TEXT, @scene.context_color(s)
-    assert_equal BotOps::Theme::RED, @scene.context_color("context" => 195_000, "model" => "claude-haiku-4-5-20251001")
-    assert_equal BotOps::Theme::YELLOW, @scene.context_color("context" => 850_000, "model" => "claude-opus-5-5")
+    assert_equal BotOps::Theme.text, @scene.context_color(s)
+    assert_equal BotOps::Theme.red, @scene.context_color("context" => 195_000, "model" => "claude-haiku-4-5-20251001")
+    assert_equal BotOps::Theme.yellow, @scene.context_color("context" => 850_000, "model" => "claude-opus-5-5")
   end
 
   def test_chart_ranges_and_legend_toggles

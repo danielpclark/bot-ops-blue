@@ -41,6 +41,9 @@ struct Frame {
     /// Sessions waiting on the person (Dock badge).
     #[serde(default)]
     badge: u32,
+    /// The theme's window background; BACKGROUND until the first frame.
+    #[serde(default)]
+    bg: Option<[u8; 3]>,
 }
 
 struct HubApp {
@@ -458,6 +461,11 @@ impl HubApp {
             Ok(obj) => Ok(obj.try_convert_to::<RString>().map(|s| s.to_string()).unwrap_or_default()),
             Err(_) => Err(()),
         })
+    }
+
+    /// The window fill: the theme's background once Ruby has sent a frame.
+    fn background(&self) -> Color32 {
+        self.frame.bg.map(|[r, g, b]| Color32::from_rgb(r, g, b)).unwrap_or(BACKGROUND)
     }
 
     fn poll_ruby(&mut self, ctx: &egui::Context) {
@@ -934,7 +942,7 @@ impl eframe::App for HubApp {
         }
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(BACKGROUND))
+            .frame(egui::Frame::none().fill(self.background()))
             .show(ctx, |ui| self.paint(ui.painter()));
 
         ctx.request_repaint_after(Duration::from_millis(250));

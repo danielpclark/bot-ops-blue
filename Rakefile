@@ -97,6 +97,22 @@ namespace :cloud do
   end
 end
 
+namespace :theme do
+  desc "Create themes/custom.yml from Standard Blue, to experiment in (standard-blue.yml itself stays as it is)"
+  task :custom do
+    src = File.join(ROOT, "themes", "standard-blue.yml")
+    dst = File.join(ROOT, "themes", "custom.yml")
+    if File.exist?(dst)
+      puts "#{dst} already exists; pick Custom on the Settings page"
+    else
+      body = File.read(src).sub(/\A(#.*\n)+\n?/, "").sub(/^name: .*$/, "name: Custom")
+      File.write(dst, "# Custom: a scratch theme to try colours in. Git ignores it; when the look\n" \
+                      "# is done, save it as themes/<name>.yml with its own name.\n#{body}")
+      puts "Wrote #{dst}; pick Custom on the Settings page (or BOT_OPS_THEME=custom)"
+    end
+  end
+end
+
 desc "Regenerate lib/bot_ops/icons.rb from Lucide's SVG icons (needs the network)"
 task :icons do
   require_relative "lib/bot_ops/icon_builder"
@@ -130,6 +146,7 @@ task :preview do
   host = BotOps::PreviewHost.new
   store = BotOps::Store.new
   scene = BotOps::Scene.new(store, host)
+  BotOps::Theme.use(ENV["BOT_OPS_THEME"]) if ENV["BOT_OPS_THEME"]
   store.apply(type: "snapshot", snapshot: BotOps::Probe.new.snapshot, local: true)
   BotOps::Layout::NAV.each do |key, _name, _glyph|
     store.page = key
