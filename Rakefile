@@ -148,6 +148,14 @@ task :preview do
   scene = BotOps::Scene.new(store, host)
   BotOps::Theme.use(ENV["BOT_OPS_THEME"]) if ENV["BOT_OPS_THEME"]
   store.apply(type: "snapshot", snapshot: BotOps::Probe.new.snapshot, local: true)
+  # Real bot events only (a copy of ~/.config/bot-ops-blue/bot-events.jsonl,
+  # say): there are no made-up bots in a preview.
+  if ENV["BOT_OPS_PREVIEW_BOTS"] && !ENV["BOT_OPS_PREVIEW_BOTS"].empty?
+    require "tmpdir"
+    log = File.join(Dir.mktmpdir("bot-ops-preview"), "bot-events.jsonl")
+    FileUtils.cp(ENV["BOT_OPS_PREVIEW_BOTS"], log)
+    store.apply(type: "snapshot", snapshot: BotOps::BotFeed.new(log: log).snapshot, local: false)
+  end
   BotOps::Layout::NAV.each do |key, _name, _glyph|
     store.page = key
     File.write(File.join(out, "#{key}.svg"), scene.build.to_svg)

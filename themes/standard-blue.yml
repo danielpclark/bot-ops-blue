@@ -54,6 +54,10 @@ colors:
   stat_tile_bottom: "#1640B8"
   cloud: "#4DA8FF"             # the collector's cloud symbol
 
+  # Dot-matrix art (the Bots page)
+  dot_off: "#16305E"           # an unlit cell of a dot grid (same as line, tuned apart)
+  dot_lit: cyan                # a lit cell when no bot colour applies
+
   # Sidebar
   nav_active_top: "#2F74F5"    # the selected page's button
   nav_active_bottom: "#163FAE"
@@ -75,6 +79,8 @@ series: [cyan, teal, yellow, blue, purple, green, orange]
 status:
   Busy: green
   Needs you: yellow
+  Working: green          # a bot with a routine running
+  Stale: yellow           # a bot whose last run went silent
   Ended: slate
   Running: teal
   Completed: teal
@@ -126,3 +132,28 @@ usage:
   Prompts: purple
   Errors: red
   default: muted
+
+# Dot-matrix art for the Bots page. Everything here is optional: a bot with
+# no sprite of its own gets a generated one, a robot face hashed from its
+# name in the bot's series colour. Sprites are up to 9 x 9 rows of equal
+# length; "." is an unlit cell, any other character is coloured by the
+# palette (a colour above, or a hex). "o" marks the eyes: they turn red
+# when the bot is in error and slate when it has gone stale.
+art:
+  dot:
+    "off": dot_off        # the unlit cells (quoted: a bare off is YAML for false)
+    off_alpha: 0.55
+    glow: true            # lit cells of a working bot glow
+  # Per status, when a bot has no sprite of its own. Keys: Working, Idle,
+  # Error, Stale.
+  status: {}
+  #   Working:
+  #     palette: { "#": green, "o": pink }
+  #     rows: [".......", "..###..", ".#o#o#.", ".#####.", "..#.#..", ".##.##.", "......."]
+  # Per bot, by the name it reports (any case).
+  bots: {}
+  #   "George":
+  #     palette: { "#": teal, "o": pink, "+": yellow }
+  #     rows: ["...+...", "..###..", ".#o#o#.", ".#####.", "..###..", ".#.#.#.", "......."]
+  #   "Bot Ops":
+  #     image: bot-ops.png  # reserved for theme images (themes/<slug>/); not drawn yet

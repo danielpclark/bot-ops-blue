@@ -4,17 +4,7 @@ require "test_helper"
 require "open3"
 require "tmpdir"
 
-class SceneTest < Minitest::Test
-  def setup
-    @store = Fixtures.store
-    @host = BotOps::PreviewHost.new
-    @scene = BotOps::Scene.new(@store, @host)
-  end
-
-  def canvas
-    @scene.build
-  end
-
+module ClicksText
   # Clicks the first clickable +text+; tab: true only matches pill tabs (22-24pt high).
   def click_text(canvas, text, tab: false)
     # A point inside the drawn text: its left edge, or the middle of its box
@@ -27,6 +17,20 @@ class SceneTest < Minitest::Test
     end
     refute_nil cmd, "no clickable text #{text.inspect}"
     assert @scene.click(*at.(cmd))
+  end
+end
+
+class SceneTest < Minitest::Test
+  include ClicksText
+
+  def setup
+    @store = Fixtures.store
+    @host = BotOps::PreviewHost.new
+    @scene = BotOps::Scene.new(@store, @host)
+  end
+
+  def canvas
+    @scene.build
   end
 
   def test_overview_draws_every_panel_from_real_data
@@ -201,5 +205,90 @@ class SingleInstanceTest < Minitest::Test
                                   "require 'bot_ops'; exit(BotOps::NativeHost.single_instance_lock(ARGV[0]) ? 0 : 3)", path)
       assert_equal 0, status.exitstatus, "and allowed once it's gone"
     end
+  end
+end
+
+class BotSceneTest < Minitest::Test
+  include ClicksText
+
+  def setup
+    @dir = Dir.mktmpdir
+    @feed = BotOps::BotFeed.new(log: File.join(@dir, "bot-events.jsonl"))
+    @now = Time.now.to_f
+    @store = Fixtures.store
+    @host = BotOps::PreviewHost.new
+    @scene = BotOps::Scene.new(@store, @host)
+  end
+
+  def teardown
+    FileUtils.remove_entry(@dir)
+  end
+
+  def bot(name, event, run, extra = {})
+    @feed.ingest({ "bot" => name, "bot_event" => event, "run_id" => run, "at" => @now }.merge(extra))
+  end
+
+  def with_bots
+    bot("Bot Ops", "run_start", "r_1", "routine" => "nightly-digest", "title" => "Compile nightly ops digest", "at" => @now - 60)
+    bot("Bot Ops", "task", "r_1", "task" => "drive.search", "detail" => "incidents", "at" => @now - 30)
+    bot("George", "run_start", "r_2", "team" => "legal", "routine" => "nda-review", "at" => @now - 400)
+    bot("George", "run_end", "r_2", "result" => "3 NDAs reviewed", "at" => @now - 300)
+    bot("Legal - Contracts", "run_start", "r_3", "team" => "legal", "routine" => "filing", "at" => @now - 900)
+    @store.apply(type: "snapshot", snapshot: @feed.snapshot, local: false)
+  end
+
+  def test_bots_page_empty_state
+    @store.page = :bots
+    c = @scene.build
+    assert_includes c.texts, "ASSISTANT BOTS"
+    assert_includes c.texts, "No bot routine runs in the last 24 hours."
+    assert_includes c.texts, "0 working"
+  end
+
+  def test_header_unchanged_without_bots
+    assert_equal 5, @store.stats.size
+    refute_includes @scene.build.texts, "BOTS"
+  end
+
+  def test_bots_page_renders_cards_strips_and_tile
+    with_bots
+    @store.page = :bots
+    c = @scene.build
+    %w[Bot\ Ops George Legal\ -\ Contracts Working Idle Stale].each { |t| assert_includes c.texts, t }
+    assert_includes c.texts, "legal · nda-review"
+    assert_includes c.texts, "3 NDAs reviewed"
+    assert_includes c.texts, "1 working"
+    stats = @store.stats
+    assert_equal 6, stats.size
+    assert_equal ["BOTS", "1/3", "1 error"], stats.last.to_a.first(3)
+    assert_includes c.texts, "BOTS"
+    assert_includes c.texts, "1/3"
+    svg = c.to_svg
+    assert_includes svg, "<circle"
+    assert_operator c.count(:circle), :>, 3 * 49 + 24 * 3, "three faces and three strips"
+  end
+
+  def test_bots_header_tile_opens_the_bots_page_and_a_card_opens_its_bot
+    with_bots
+    c = @scene.build
+    click_text(c, "BOTS")
+    assert_equal :bots, @store.page
+    c = @scene.build
+    click_text(c, "George")
+    assert_equal "George", @store.overlay.title
+    assert_includes @store.overlay.lines.map { |l| l[1] }, "Runs (last 12 hours, oldest first)"
+    assert_includes @scene.build.texts, "George"
+  end
+
+  def test_a_bot_run_is_a_routine_session
+    with_bots
+    @store.page = :sessions
+    c = @scene.build
+    assert_includes c.texts, "Compile nightly ops digest"
+    assert_includes c.texts, "Bot Ops · Routine · nightly-digest"
+    assert_includes c.texts, "Legal - Contracts · Routine · stale", "a silent run says so"
+    assert_includes c.texts, "Stale"
+    @store.page = :machines
+    assert_includes @scene.build.texts, "bots"
   end
 end

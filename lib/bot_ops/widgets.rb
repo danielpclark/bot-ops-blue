@@ -174,6 +174,90 @@ module BotOps
       dot(x, y, color, d)
     end
 
+    # ---- dot matrices --------------------------------------------------
+    #
+    # The Bots page's art: grids of the same dots the status markers use,
+    # glow_dot on the cells that are lit (see DotArt for the sprites).
+
+    # The theme's `art.dot` settings: the unlit cell's colour and alpha, and
+    # whether lit cells glow.
+    def dot_off_color(alpha = nil)
+      dot = theme.art["dot"] || {}
+      col(dot["off"] || theme.dot_off, alpha || dot["off_alpha"] || 0.55)
+    end
+
+    def dots_glow?
+      theme.art.dig("dot", "glow") != false
+    end
+
+    # A rows x cols grid of dots, top-left at (x, y), each `d` wide with
+    # `gap` between. cells: rows of colour arrays (from col) or nil for an
+    # unlit cell, drawn faintly so the matrix's shape always reads. Lit
+    # cells use glow_dot when glow: true.
+    def dot_grid(x, y, cells, d:, gap:, glow: false, off_alpha: nil)
+      pitch = d + gap
+      off = dot_off_color(off_alpha)
+      cells.each_with_index do |row, r|
+        row.each_with_index do |c, i|
+          px = x + i * pitch
+          py = y + r * pitch
+          if c.nil? then dot(px, py, off, d)
+          elsif glow then glow_dot(px, py, c, d)
+          else dot(px, py, c, d)
+          end
+        end
+      end
+    end
+
+    # A palette entry (a theme colour name or hex) as a hex.
+    def art_color(value)
+      s = value.to_s
+      return s.upcase if s.match?(Theme::HEX)
+      Theme::KEYS.include?(s.to_sym) ? theme[s] : theme.dot_lit
+    end
+
+    # A DotArt sprite ({ "rows", "palette" }) as a dot grid. dim: true halves
+    # the lit cells' alpha (a bot that has gone stale).
+    def dot_sprite(x, y, sprite, d:, gap:, dim: false, glow: true)
+      palette = sprite["palette"] || {}
+      alpha = dim ? 0.5 : 1.0
+      cells = DotArt.parse_rows(sprite["rows"]).map do |row|
+        row.map { |ch| ch && col(art_color(palette.fetch(ch, theme.dot_lit)), alpha) }
+      end
+      dot_grid(x, y, cells, d: d, gap: gap, glow: glow && dots_glow?, off_alpha: dim ? 0.3 : nil)
+    end
+
+    # What a run's outcome (or a bot's status) is called in the theme's
+    # `status` table, which colours the dots.
+    STRIP_LABELS = DotArt::LABELS
+
+    # Rows of outcome dots, `cols` to a row, wrapping: outcomes are strings
+    # from STRIP_LABELS ("ended", "error", "working", "stale", "idle"). A
+    # working dot glows and, on odd seconds, wears a wider halo: the pulse,
+    # since the window repaints every second while anything reports. Empty
+    # cells up to the next full row (or `rows` rows) are drawn unlit.
+    # Returns the height drawn.
+    def dot_strip(x, y, outcomes, d:, gap:, cols:, rows: nil, off_alpha: 0.35)
+      pitch = d + gap
+      rows = [rows.to_i, (outcomes.size / cols.to_f).ceil, 1].max
+      pulse = Time.now.to_i.odd?
+      off = dot_off_color(off_alpha)
+      (rows * cols).times do |i|
+        px = x + (i % cols) * pitch
+        py = y + (i / cols) * pitch
+        o = outcomes[i]
+        next dot(px, py, off, d) unless o
+        c = col(Theme.status_color(STRIP_LABELS[o] || o))
+        if o == "working"
+          @c.circle(px + d / 2.0, py + d / 2.0, d / 2.0 + 4, fill: [c[0], c[1], c[2], 0.10]) if pulse
+          glow_dot(px, py, c, d)
+        else
+          dot(px, py, c, d)
+        end
+      end
+      rows * pitch - gap
+    end
+
     # A framed dashboard panel. The block draws the body with its origin at
     # the panel's top-left corner just below the title bar.
     #   icon: an ICONS name before the title; right: a count shown in a pill;

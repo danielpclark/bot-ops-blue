@@ -92,6 +92,22 @@ module BotOps
       machines.find { |m| m["local"] }
     end
 
+    # ---- bots --------------------------------------------------------------
+
+    BOT_ORDER = { "working" => 0, "error" => 1, "stale" => 2, "idle" => 3 }.freeze
+
+    # Assistant bots from every BotFeed source (see BotFeed#snapshot "bots"),
+    # the ones working first, then in error, stale, and idle, then by name.
+    def bots(now = Time.now)
+      cached(:bots) do
+        @machines.flat_map do |host, m|
+          Array(m["snapshot"]["bots"]).map do |b|
+            b.merge("source" => host, "online" => now - m["received_at"] < OFFLINE_AFTER_S)
+          end
+        end.sort_by { |b| [BOT_ORDER.fetch(b["status"], 9), b["name"].to_s.downcase] }
+      end
+    end
+
     # ---- sessions ----------------------------------------------------------
 
     # Live sessions on every online machine, most recent activity first.
@@ -292,7 +308,7 @@ module BotOps
     TOKEN_KINDS = %w[out in cache_read cache_write].freeze
 
     CLIENT_NAMES = { "cli" => "CLI", "claude-vscode" => "VS Code", "cloud" => "claude.ai", "claude-desktop" => "Desktop",
-                     "sdk-cli" => "SDK", "sdk-ts" => "SDK", "sdk-py" => "SDK" }.freeze
+                     "sdk-cli" => "SDK", "sdk-ts" => "SDK", "sdk-py" => "SDK", "bot-routine" => "Bots" }.freeze
 
     def self.client_name(entrypoint)
       CLIENT_NAMES[entrypoint] || (entrypoint.to_s.empty? ? "(unknown)" : entrypoint)
@@ -407,9 +423,10 @@ module BotOps
       end
     end
 
+    # The header strip's figures; a sixth, BOTS, only once a bot has reported.
     def stats
       t = totals
-      [
+      list = [
         Stat.new("LIVE SESSIONS",   sessions.size.to_s, "+#{recent_sessions.size} earlier", recent_sessions.empty? ? Theme.muted : Theme.green),
         if attention_count.positive?
           Stat.new("BUSY NOW", busy_count.to_s, "#{attention_count} need you", Theme.yellow)
@@ -420,6 +437,13 @@ module BotOps
         Stat.new("TOOL CALLS (24H)", Store.count(t[:tool_calls]), "#{t[:errors]} error#{'s' unless t[:errors] == 1}", t[:errors].positive? ? Theme.red : Theme.muted),
         Stat.new("OUTPUT TOKENS",   Store.count(t[:out_tokens]), "24h", Theme.cyan)
       ]
+      unless bots.empty?
+        working = bots.count { |b| b["status"] == "working" }
+        bad = bots.count { |b| %w[error stale].include?(b["status"]) }
+        list << Stat.new("BOTS", "#{working}/#{bots.size}", bad.positive? ? "#{bad} error#{'s' unless bad == 1}" : "working",
+                         bad.positive? ? Theme.red : Theme.muted)
+      end
+      list
     end
 
     # ---- formatting helpers ---------------------------------------------

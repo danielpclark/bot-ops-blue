@@ -12,6 +12,9 @@ module BotOps
   #                       ngrok's basic-auth forwards, see cloud/ngrok-policy)
   #   POST /v1/event      Authorization: Bearer <token>   body: one hook event
   #                       from cloud/bot-ops-report.py (cloud sessions)
+  #   POST /v1/bot-event  Authorization: Bearer <token>   body: one routine-run
+  #                       event from cloud/bot-ops-bot-report.py (assistant
+  #                       bots), or {"events": [...]} with several
   #   GET  /v1/health     -> 200 "ok"
   #
   # Off unless BOT_OPS_LISTEN is set (e.g. "0.0.0.0:47800" for the LAN, or a
@@ -29,7 +32,7 @@ module BotOps
 
     attr_reader :address
 
-    def initialize(listen, token, on_event: nil, &on_snapshot)
+    def initialize(listen, token, on_event: nil, on_bot_event: nil, &on_snapshot)
       host, port = listen.to_s.include?(":") ? listen.split(":", 2) : ["127.0.0.1", listen]
       @host = host.empty? ? "0.0.0.0" : host
       @port = Integer(port)
@@ -37,6 +40,7 @@ module BotOps
       raise ArgumentError, "BOT_OPS_TOKEN must be set (16+ characters) to accept remote snapshots" if @token.length < 16
       @on_snapshot = on_snapshot
       @on_event = on_event
+      @on_bot_event = on_bot_event
     end
 
     def start
@@ -81,7 +85,7 @@ module BotOps
 
     def route(method, path, headers, client)
       return ["200 OK", "ok"] if method == "GET" && path == "/v1/health"
-      return ["404 Not Found", "not found"] unless method == "POST" && %w[/v1/snapshot /v1/event].include?(path)
+      return ["404 Not Found", "not found"] unless method == "POST" && %w[/v1/snapshot /v1/event /v1/bot-event].include?(path)
       return ["401 Unauthorized", "bad token"] unless authorized?(headers["authorization"])
       length = headers["content-length"].to_i
       return ["413 Payload Too Large", "too large"] if length <= 0 || length > MAX_BODY
@@ -89,6 +93,13 @@ module BotOps
       if path == "/v1/event"
         return ["404 Not Found", "events not enabled"] unless @on_event
         return @on_event.call(body) ? ["204 No Content", ""] : ["422 Unprocessable Entity", "not a hook event"]
+      end
+      if path == "/v1/bot-event"
+        return ["404 Not Found", "bot events not enabled"] unless @on_bot_event
+        # A reporter flushing its spool sends several at once.
+        events = body.is_a?(Hash) && body["events"].is_a?(Array) ? body["events"] : [body]
+        taken = events.count { |e| @on_bot_event.call(e) }
+        return taken.positive? ? ["204 No Content", ""] : ["422 Unprocessable Entity", "not a bot event"]
       end
       snapshot = body
       return ["422 Unprocessable Entity", "no host"] unless snapshot.is_a?(Hash) && snapshot["host"].is_a?(String)

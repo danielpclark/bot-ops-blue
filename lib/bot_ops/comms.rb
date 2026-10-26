@@ -68,12 +68,13 @@ module BotOps
 
     # Live Claude Code activity. Probes this machine every POLL_S seconds on a
     # background thread, and, when BOT_OPS_LISTEN is set, also accepts
-    # snapshots from bin/bot-ops-agent on other machines. Each snapshot becomes
-    # one { type: "snapshot" } event for Store#apply.
+    # snapshots from bin/bot-ops-agent on other machines, hook events from
+    # cloud sessions and routine-run events from assistant bots. Each
+    # snapshot becomes one { type: "snapshot" } event for Store#apply.
     class ClaudeChannel < Channel
       POLL_S = 1
 
-      attr_reader :collector, :collector_error, :cloud
+      attr_reader :collector, :collector_error, :cloud, :bots
 
       def initialize(probe: Probe.new(full_detail: true), listen: ENV["BOT_OPS_LISTEN"], token: Collector.token)
         super()
@@ -90,6 +91,7 @@ module BotOps
             begin
               push(type: "snapshot", snapshot: @probe.snapshot, local: true)
               push(type: "snapshot", snapshot: @cloud.snapshot, local: false) if @cloud&.any?
+              push(type: "snapshot", snapshot: @bots.snapshot, local: false) if @bots&.any?
             rescue StandardError => e
               push(type: "probe.error", message: "#{e.class}: #{e.message}")
             end
@@ -109,7 +111,7 @@ module BotOps
 
       def collector_status
         return "Collector failed: #{@collector_error}" if @collector_error
-        return "Collecting on #{@collector.address} (+ cloud)" if @collector
+        return "Collecting on #{@collector.address} (+ cloud, bots)" if @collector
         "This machine only"
       end
 
@@ -117,7 +119,9 @@ module BotOps
 
       def start_collector
         @cloud = CloudFeed.new
-        @collector = Collector.new(@listen, @token, on_event: ->(e) { @cloud.ingest(e) }) do |snap|
+        @bots = BotFeed.new
+        @collector = Collector.new(@listen, @token, on_event: ->(e) { @cloud.ingest(e) },
+                                                    on_bot_event: ->(e) { @bots.ingest(e) }) do |snap|
           push(type: "snapshot", snapshot: snap, local: false)
         end.start
       rescue StandardError => e

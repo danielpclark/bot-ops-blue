@@ -20,6 +20,13 @@ class LayoutTest < Minitest::Test
     assert_equal L::ROW1_H, fleet[3], "rows keep their height when only width grows"
   end
 
+  def test_nav_has_a_bots_page_after_machines
+    keys = L::NAV.map(&:first)
+    assert_equal keys.index(:machines) + 1, keys.index(:bots)
+    assert_equal [:bots, "Bots", "bot"], L::NAV.find { |k, _, _| k == :bots }
+    assert BotOps::ICONS.key?("bot")
+  end
+
   def test_scene_lays_out_for_the_window_size_but_never_below_design
     scene = BotOps::Scene.new(BotOps::Store.new, BotOps::PreviewHost.new)
     scene.resize(1820, 1024)
