@@ -122,6 +122,74 @@ class ThemeTest < Minitest::Test
     refute T.reload_if_changed
   end
 
+  def test_new_colour_keys_resolve
+    assert_equal "#16305E", T.dot_off
+    assert_equal T.cyan, T.dot_lit
+    assert_equal T.green, T.status_color("Working")
+    assert_equal T.yellow, T.status_color("Stale")
+    write_theme("dotty", "colors:\n  dot_off: '#101010'\n  dot_lit: yellow\n")
+    assert T.use("dotty")
+    assert_equal ["#101010", T.standard.yellow], [T.dot_off, T.dot_lit]
+  end
+
+  def test_art_section_is_optional
+    write_theme("plain", "colors:\n  cyan: '#ff8800'\n")
+    assert T.use("plain")
+    assert_equal T.standard.art, T.art, "inherited whole from Standard Blue"
+    assert_equal({ "off" => "#16305E", "off_alpha" => 0.55, "glow" => true }, T.art["dot"])
+    assert_equal({}, T.art["bots"])
+    assert T.art.frozen?
+  end
+
+  def test_art_sprites_load_and_inherit_per_key
+    write_theme("faces", <<~YAML)
+      art:
+        dot: { glow: false }
+        status:
+          Working: { palette: { "#": green, "o": pink }, rows: ["..#..", ".o#o.", "#####"] }
+        bots:
+          "George": { palette: { "#": "#123456" }, rows: ["#.#", ".#.", "#.#"] }
+    YAML
+    assert T.use("faces")
+    assert_equal({ "off" => "#16305E", "off_alpha" => 0.55, "glow" => false }, T.art["dot"], "dot settings merge over the base")
+    assert_equal({ "#" => T.standard.green, "o" => T.standard.pink }, T.art["status"]["Working"]["palette"], "palette colours resolve like colours")
+    assert_equal ["#.#", ".#.", "#.#"], T.art["bots"]["George"]["rows"]
+    assert_equal T.art["bots"]["George"], BotOps::DotArt.sprite_for(T.art, "george", "idle")
+    assert_equal T.art["status"]["Working"], BotOps::DotArt.sprite_for(T.art, "Bot Ops", "working")
+  end
+
+  def test_art_sprite_rows_must_be_rectangular
+    write_theme("ragged", "art:\n  bots:\n    George: { palette: { '#': cyan }, rows: ['##', '#'] }\n")
+    write_theme("huge", "art:\n  bots:\n    George: { palette: { '#': cyan }, rows: ['##########'] }\n")
+    write_theme("norows", "art:\n  bots:\n    George: { palette: { '#': cyan } }\n")
+    before = T.current
+    _, err = capture_io { %w[ragged huge norows].each { |slug| refute T.use(slug), slug } }
+    assert_same before, T.current
+    assert_match(/art\.bots\.George\.rows must be strings of equal length/, err)
+    assert_match(/art\.bots\.George\.rows may be at most 9 x 9/, err)
+    assert_match(/art\.bots\.George needs `rows`/, err)
+  end
+
+  def test_art_palette_must_use_known_colours
+    write_theme("badcol", "art:\n  status:\n    Error: { palette: { '#': crimson }, rows: ['#'] }\n")
+    write_theme("nopal", "art:\n  status:\n    Error: { palette: { '#': red }, rows: ['#x'] }\n")
+    write_theme("badalpha", "art:\n  dot: { off_alpha: 3 }\n")
+    _, err = capture_io { %w[badcol nopal badalpha].each { |slug| refute T.use(slug), slug } }
+    assert_match(/art\.status\.Error\.palette\.# is "crimson"/, err)
+    assert_match(/art\.status\.Error\.rows uses "x", not in its palette/, err)
+    assert_match(/art\.dot\.off_alpha is 3/, err)
+  end
+
+  def test_art_image_field_is_reserved_and_ignored
+    write_theme("pics", "art:\n  bots:\n    'Bot Ops': { image: bot-ops.png }\n    George: { image: g.png, palette: { '#': cyan }, rows: ['#'] }\n")
+    assert T.use("pics")
+    assert_equal({ "image" => "bot-ops.png" }, T.art["bots"]["Bot Ops"])
+    assert_equal "g.png", T.art["bots"]["George"]["image"]
+    assert_equal BotOps::DotArt.identicon("Bot Ops", body: T.cyan), BotOps::DotArt.sprite_for(T.art, "Bot Ops", "idle", body: T.cyan),
+                 "nothing is drawn from an image yet"
+    assert_equal ["#"], BotOps::DotArt.sprite_for(T.art, "George", "idle")["rows"]
+  end
+
   def test_prefs_remember_the_theme
     store = BotOps::Store.new
     assert_equal "standard-blue", store.theme

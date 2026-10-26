@@ -13,9 +13,9 @@ module BotOps
     # Icons (ICONS names) for a session's client: its logo in Claude Sessions,
     # and a simpler mark in Live Activity.
     CLIENT_ICONS = { "cloud" => "cloud", "cli" => "monitor", "claude-vscode" => "vscode", "claude-desktop" => "app-window",
-                     "sdk-cli" => "code-xml", "sdk-ts" => "code-xml", "sdk-py" => "code-xml" }.freeze
+                     "sdk-cli" => "code-xml", "sdk-ts" => "code-xml", "sdk-py" => "code-xml", "bot-routine" => "alarm-clock" }.freeze
     ENTRY_GLYPHS = { "cloud" => "cloud", "cli" => "chevron-right", "claude-vscode" => "diamond", "claude-desktop" => "app-window",
-                     "sdk-cli" => "code-xml", "sdk-ts" => "code-xml", "sdk-py" => "code-xml" }.freeze
+                     "sdk-cli" => "code-xml", "sdk-ts" => "code-xml", "sdk-py" => "code-xml", "bot-routine" => "alarm-clock" }.freeze
 
     # Stable colour per project, so a repo keeps its colour across panels.
     def project_color(name)
@@ -27,7 +27,7 @@ module BotOps
     end
 
     ENTRY_NAMES = { "cloud" => "Cloud", "cli" => "CLI", "claude-vscode" => "VS Code", "claude-desktop" => "Desktop",
-                    "sdk-cli" => "SDK", "sdk-ts" => "SDK", "sdk-py" => "SDK" }.freeze
+                    "sdk-cli" => "SDK", "sdk-ts" => "SDK", "sdk-py" => "SDK", "bot-routine" => "Routine" }.freeze
 
     def entry_name(s)
       ENTRY_NAMES[s["entrypoint"]] || s["entrypoint"] || s["kind"]
@@ -42,7 +42,13 @@ module BotOps
     end
 
     def status_label(s)
-      s["attention"] ? "Needs you" : s["status"].to_s.capitalize
+      return "Needs you" if s["attention"]
+      s["stale"] ? "Stale" : s["status"].to_s.capitalize
+    end
+
+    # A bot run's routine, when its title is what the row shows.
+    def routine_of(s)
+      s["routine"] if s["kind"] == "bot" && s["routine"] != Store.display_name(s)
     end
 
     def empty_state(text, y = 14)
@@ -65,9 +71,14 @@ module BotOps
       ended = s["status"] == "ended"
       mid = (w * 0.55).round
       card(10, y, w - 20, row_h - 7, selected: sel && s["id"] == sel["id"])
-      avatar(18, y + 6, project_color(project_of(s)), client_icon(s), 37, dim: ended)
+      if s["kind"] == "bot"
+        bot_avatar(18, y + 6, s["bot"], run_state(s), 37)
+      else
+        avatar(18, y + 6, project_color(project_of(s)), client_icon(s), 37, dim: ended)
+      end
       txt(fit_text(Store.display_name(s), mid - 76, 12.5, :semibold), 66, y + 7, size: 12.5, color: ended ? theme.muted : theme.text, weight: :semibold)
-      sub = [project_of(s), entry_name(s), (s["name"] unless ended || s["name"] == Store.display_name(s))]
+      sub = [project_of(s), entry_name(s), routine_of(s), (s["name"] unless ended || s["name"] == Store.display_name(s)),
+             ("stale" if s["stale"])]
       txt(fit_text(sub.compact.join(" · "), mid - 76, 10.5), 66, y + 26, size: 10.5, color: ended ? theme.dim : theme.subtle)
       status_pill(mid, y + 8, status_label(s))
       txt(Store.model_name(s["model"]), mid + 13, y + 26, size: 10.5, color: ended ? theme.dim : theme.muted)
@@ -449,7 +460,11 @@ module BotOps
       list.first(rows).each_with_index do |m, i|
         y = 8 + i * row_h
         c = m["online"] ? theme.green : theme.red
-        glyph = m["local"] ? "monitor" : (m["host"] == CloudFeed::HOST ? "cloud" : "server")
+        glyph = if m["local"] then "monitor"
+                elsif m["host"] == CloudFeed::HOST then "cloud"
+                elsif m["host"] == BotFeed::HOST then "bot"
+                else "server"
+                end
         square_icon(16, y + 2, c == theme.green ? theme.tile_green : c, glyph, 34)
         txt(fit_text(m["host"], w - 130, 11.5, :semibold), 62, y + 4, size: 11.5, color: theme.text, weight: :semibold)
         os = m["health"]["os"]
@@ -458,6 +473,138 @@ module BotOps
         txt(m["online"] ? "online" : "offline", w - 74, y + 5, size: 10.5, color: c, weight: :medium, width: 60, align: :right)
         @c.hit(4, y, w - 8, row_h) { open_overlay(machine_overlay(m)) }
       end
+    end
+
+    # ---- Bots ----------------------------------------------------------
+
+    BOT_CARD_H = 132
+    BOT_CARD_MIN_W = 340
+    STRIP_COLS = 24
+    STRIP_D = 6
+    STRIP_GAP = 3
+
+    # How a run stands, in the words of a bot's status (for its avatar's tint).
+    def run_state(s)
+      return "working" if s["status"] == "busy"
+      return "stale" if s["stale"]
+      s["errors"].to_i.positive? ? "error" : "idle"
+    end
+
+    def bot_status_label(b)
+      DotArt::LABELS.fetch(b["status"], "Idle")
+    end
+
+    # A bot's face: its sprite from the theme, else its generated identicon
+    # in the bot's own colour, in a framed `size` box. Working bots glow;
+    # in error the eyes turn red; stale draws everything at half strength
+    # with slate eyes.
+    def bot_avatar(x, y, name, status, size = 37)
+      sprite = DotArt.sprite_for(theme.art, name, status, body: project_color(name))
+      rows = sprite["rows"].size
+      cols = sprite["rows"].first.length
+      d, gap = [rows, cols].max > 7 ? [3, 1.25] : [4, 1.5]
+      pitch = d + gap
+      ox = (size - (cols * pitch - gap)) / 2.0
+      oy = (size - (rows * pitch - gap)) / 2.0
+      @c.glow(x, y, size, size, curve: 9, blur: 6, color: col(theme.bolt, 0.12))
+      @c.rect(x - 3, y - 3, size + 6, size + 6, curve: 9, stroke: col(theme.border, 0.35))
+      palette = sprite["palette"] || {}
+      eye = { "error" => theme.red, "stale" => theme.slate }[status]
+      palette = palette.merge(DotArt::EYE => eye) if eye && palette.key?(DotArt::EYE)
+      dot_sprite(x + ox, y + oy, sprite.merge("palette" => palette), d: d, gap: gap, dim: status == "stale", glow: status == "working")
+    end
+
+    # The header's BOTS tile: a 5 x 5 matrix, one cell per bot (the working
+    # ones first, as Store#bots orders them), coloured by status.
+    def bot_tile(x, y, size = 28)
+      statuses = @store.bots.first(25).map { |b| b["status"] == "idle" ? "ended" : b["status"] }
+      d = size * 4 / 28.0
+      gap = size * 2 / 28.0
+      dot_strip(x + (size - 5 * (d + gap) + gap) / 2.0, y + (size - 5 * (d + gap) + gap) / 2.0, statuses,
+                d: d, gap: gap, cols: 5, rows: 5, off_alpha: 0.55)
+    end
+
+    def draw_bots_body(w, h)
+      list = @store.bots
+      return empty_state("No bot routine runs in the last 24 hours.") if list.empty?
+      cols = [(w - 20) / BOT_CARD_MIN_W, 1].max
+      cw = ((w - 20 - (cols - 1) * 10) / cols.to_f).floor
+      rows = [(h - 8) / (BOT_CARD_H + 10), 1].max
+      list.first(rows * cols).each_with_index do |b, i|
+        bot_card(b, 10 + (i % cols) * (cw + 10), 8 + (i / cols) * (BOT_CARD_H + 10), cw, BOT_CARD_H)
+      end
+    end
+
+    # One bot: its face, name and team, status, a dot per run of the last
+    # 24 hours (oldest left), its counts, and what its last run said.
+    def bot_card(b, x, y, w, h)
+      status = b["status"]
+      c = Theme.status_color(bot_status_label(b))
+      card(x, y, w, h, accent: c)
+      bot_avatar(x + 12, y + 12, b["name"], status, 37)
+      txt(fit_text(b["name"], w - 190, 13, :semibold), x + 60, y + 12, size: 13, color: theme.text, weight: :semibold)
+      last = b["last_run"] || {}
+      sub = [b["team"], (last["routine"] || (b["current_run"] && "running")), (b["online"] ? nil : "source offline")]
+      txt(fit_text(sub.compact.join(" · "), w - 190, 10.5), x + 60, y + 30, size: 10.5, color: theme.subtle)
+      status_pill(x + w - 110, y + 14, bot_status_label(b))
+
+      runs = b["runs"] || []
+      sx = x + 12
+      sy = y + 60
+      strip_h = dot_strip(sx, sy, runs.map(&:last), d: STRIP_D, gap: STRIP_GAP, cols: STRIP_COLS)
+      strip_w = STRIP_COLS * (STRIP_D + STRIP_GAP) - STRIP_GAP
+      # The strip's span: when its first run started, and its last.
+      unless runs.empty?
+        first = Time.at(runs.first[0]).strftime("%H:%M")
+        last_at = status == "working" ? "now" : Time.at(runs.last[1] || runs.last[0]).strftime("%H:%M")
+        txt(first, sx, sy + strip_h + 3, size: 9, color: theme.dim)
+        txt(last_at, sx, sy + strip_h + 3, size: 9, color: theme.dim, width: strip_w, align: :right) if last_at != first
+      end
+      @c.hit(sx, sy, strip_w, strip_h) { open_overlay(bot_overlay(b)) }
+
+      rx = sx + strip_w + 12
+      rw = x + w - 12 - rx
+      errors = b["errors_24h"].to_i
+      txt("#{b['runs_24h']} run#{'s' unless b['runs_24h'] == 1}", rx, y + 60, size: 10.5, color: theme.text, width: rw, align: :right)
+      txt("#{errors} error#{'s' unless errors == 1}", rx, y + 76, size: 10.5, color: errors.positive? ? theme.red : theme.muted, width: rw, align: :right)
+      txt(Store.ago(b["last_seen"]), rx, y + 92, size: 10.5, color: theme.muted, width: rw, align: :right)
+
+      line, color = if last["error"] && !last["error"].empty? then [last["error"], theme.red]
+                    elsif last["stale"] then ["Last run went silent (no heartbeat for 5 min).", theme.yellow]
+                    elsif last["result"] && !last["result"].empty? then [last["result"], theme.text_detail]
+                    else [nil, nil]
+                    end
+      txt(fit_text(line, w - 24, 10.5), x + 12, y + h - 22, size: 10.5, color: color) if line
+      chevron(x + w - 22, y + h / 2.0 + 12)
+      @c.hit(x, y, w, h) { open_overlay(bot_overlay(b)) }
+    end
+
+    # Everything known about one bot: its state and each run of the last
+    # 12 hours, oldest first.
+    def bot_overlay(b)
+      last = b["last_run"] || {}
+      runs = @store.all_sessions.select { |s| s["kind"] == "bot" && s["bot"] == b["name"] }.sort_by { |s| s["started_at"].to_f }
+      o = Overlay.new(b["name"], subtitle: [b["team"], bot_status_label(b), b["online"] ? nil : "source offline"].compact.join("  ·  "))
+      o.field("Status", bot_status_label(b))
+      o.field("Team", b["team"])
+      o.field("Last seen", Store.ago(b["last_seen"]))
+      o.field("Runs (24h)", b["runs_24h"])
+      o.field("Errors (24h)", b["errors_24h"])
+      o.field("Current run", b["current_run"])
+      o.field("Last run", last["routine"] && "#{last['routine']} (#{last['stale'] ? 'went silent' : last['status']})")
+      o.field("Last result", last["result"])
+      o.field("Last error", last["error"])
+      rows = runs.map do |s|
+        took = s["ended_at"] ? Store.duration(s["ended_at"] - s["started_at"]) : "running"
+        [Time.at(s["started_at"]).strftime("%a %H:%M"), took, s["stale"] ? "silent" : s["status"], s["routine"].to_s,
+         s["tool_calls"].to_i, s["errors"].to_i, (s["last_error"] || s["result"]).to_s]
+      end
+      o.block("Runs (last 12 hours, oldest first)", table(%w[started took status routine tasks errors result\ /\ error], rows, left: [0, 1, 2, 3, 6]))
+      strip = (b["runs"] || []).map { |_, _, outcome| { "working" => "◉", "ended" => "●", "error" => "✖", "stale" => "◌" }[outcome] }.join
+      o.block("Last 24 hours (oldest first; ● ended, ✖ error, ◌ went silent, ◉ working)", strip) unless strip.empty?
+      o.note("Bots report their scheduled routine runs only: a start, a heartbeat a minute, and an end or an error. " \
+             "A run with no heartbeat for 5 minutes is shown as ended, stale, with one error.")
+      o
     end
 
     # "This session only", in the panel's title bar: narrows Tool Calls and
@@ -537,6 +684,7 @@ module BotOps
       o.block("By session (whole session so far, sessions from the last 12 hours)",
               table(["session", *head], tb[:by_session].first(30).map { |n, x| [n.to_s[0, 60], *kinds.(x)] }))
       o.note("claude.ai sessions report tokens once their environment runs the updated setup script (cloud/setup.sh); before that they're missing here.")
+      o.note("Bot routines don't report token counts.")
       o
     end
 
@@ -688,6 +836,7 @@ module BotOps
       sessions = @store.sessions.select { |s| s["host"] == m["host"] }
       source = if m["local"] then "this machine (read directly)"
                elsif m["host"] == CloudFeed::HOST then "cloud sessions (hook reports)"
+               elsif m["host"] == BotFeed::HOST then "assistant bot routines (pushed reports)"
                else "bin/bot-ops-agent"
                end
       o = Overlay.new(m["host"], subtitle: m["online"] ? "online" : "offline, last seen #{Store.ago(m['seen_at'])}")

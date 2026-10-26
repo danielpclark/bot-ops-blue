@@ -72,6 +72,7 @@ module BotOps
       [:usage,     "Usage",     "chart-no-axes-column"],
       [:logs,      "Logs",      "scroll-text"],
       [:machines,  "Machines",  "server"],
+      [:bots,      "Bots",      "bot"],
       [:settings,  "Settings",  "settings"]
     ].freeze
   end

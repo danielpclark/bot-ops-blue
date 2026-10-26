@@ -184,19 +184,31 @@ sessions then appear as the `claude.ai` source with a ☁ label.
 
 **Step-by-step guide, with screenshots: [docs/cloud-sessions.md](docs/cloud-sessions.md).**
 
+### Assistant bots (scheduled routines)
+
+Bots that run scheduled routines on another machine (a Grok Bot box, say)
+report each run the same way: a small reporter wraps the routine's command
+and posts `run_start`, a heartbeat a minute, and `run_end` or `run_error`
+to the collector. Runs show as **Routine** sessions, and each bot gets a
+card on the **Bots** page, with a dot for every run of the last 24 hours.
+
+**Guide: [docs/bot-sessions.md](docs/bot-sessions.md).**
+
 ## How it is put together
 
 ```
 bot_ops_blue.rb             entry point
 bin/bot-ops-agent           reports another machine to the dashboard
-cloud/                      cloud reporter, its setup script, hook settings, ngrok policy
-docs/                       guides (cloud sessions)
+cloud/                      cloud reporter, its setup script, hook settings, ngrok policy; the bot reporter
+docs/                       guides (cloud sessions, assistant bots)
 themes/                     colour themes, one YAML file each (standard-blue.yml is the default)
 lib/bot_ops/
   store.rb                  all dashboard state + Store#apply(event)
   probe.rb                  reads this machine's Claude Code sessions + health
   collector.rb              HTTP endpoint for other machines' snapshots + cloud events
   cloud_feed.rb             turns cloud hook events into the claude.ai source
+  bot_feed.rb               turns bots' routine-run events into the bots source
+  dot_art.rb                dot-matrix sprites for the Bots page (identicons, theme art)
   comms.rb                  Channel interface, Multiplexer, ClaudeChannel
   display.rb                picks the monitor the window opens on
   scene.rb                  builds a frame from the Store; handles clicks

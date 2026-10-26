@@ -71,7 +71,7 @@ module BotOps
 
     # ---- header --------------------------------------------------------
 
-    STAT_ICONS = %w[activity zap message-square settings layers].freeze
+    STAT_ICONS = %w[activity zap message-square settings layers bot].freeze
     STAT_X0 = 424      # the stats strip, in design coordinates
     STAT_X1 = 1112
 
@@ -115,29 +115,40 @@ module BotOps
       draw_window_controls
     end
 
+    # Shorter labels for when a sixth stat (BOTS) shares the strip.
+    COMPACT_LABELS = { "LIVE SESSIONS" => "SESSIONS", "PROMPTS (24H)" => "PROMPTS", "TOOL CALLS (24H)" => "TOOL CALLS",
+                       "OUTPUT TOKENS" => "OUT TOKENS" }.freeze
+    COMPACT_NOTES = { / errors?\z/ => " err", / projects?\z/ => " proj" }.freeze
+
     # Header stats in a raised strip: icon, label, the number and a note.
+    # Six of them (once bots report) draw a little tighter so nothing is cut.
     def draw_stats(dx)
       x0 = STAT_X0
       x1 = STAT_X1 + dx
       hh = Layout::HEADER_H
       frame(x0, 10, x1 - x0, hh - 24, curve: 12, glow: 0.18)
       stats = @store.stats
+      compact = stats.size > 5
       slot = (x1 - x0 - 16) / stats.size.to_f
+      tile = compact ? 24 : 28
+      ty = 33 - tile / 2.0
       stats.each_with_index do |s, i|
         x = x0 + 14 + slot * i
-        tile = 28
-        @c.glow(x, 19, tile, tile, curve: 8, blur: 6, color: col(theme.bolt, 0.12))
-        grad_rect(x, 19, tile, tile, col(theme.stat_tile_top, 0.9), col(theme.stat_tile_bottom, 0.9), curve: 8)
-        icon(STAT_ICONS[i], x + tile / 2.0, 19 + tile / 2.0, 16, col(theme.white))
-        tx = x + tile + 9
-        avail = slot - tile - 14
-        lsize = text_w(s.label, 9.5, :semibold, kerning: 0.3) <= avail ? 9.5 : 8.5
-        txt(fit_text(s.label, avail, lsize, :semibold), tx, 18, size: lsize, color: theme.text, weight: :semibold, kerning: 0.3)
+        @c.glow(x, ty, tile, tile, curve: 8, blur: 6, color: col(theme.bolt, 0.12))
+        grad_rect(x, ty, tile, tile, col(theme.stat_tile_top, 0.9), col(theme.stat_tile_bottom, 0.9), curve: 8)
+        # The bots tile is a dot matrix, one cell per bot, instead of an icon.
+        s.label == "BOTS" ? bot_tile(x, ty, tile) : icon(STAT_ICONS[i], x + tile / 2.0, ty + tile / 2.0, compact ? 14 : 16, col(theme.white))
+        tx = x + tile + (compact ? 7 : 9)
+        avail = slot - tile - (compact ? 10 : 14)
+        label = compact ? COMPACT_LABELS.fetch(s.label, s.label) : s.label
+        lsize = text_w(label, 9.5, :semibold, kerning: 0.3) <= avail ? 9.5 : 8.5
+        txt(fit_text(label, avail, lsize, :semibold), tx, 18, size: lsize, color: theme.text, weight: :semibold, kerning: 0.3)
         txt(s.value, tx, 33, size: 22, color: theme.white, weight: :bold)
         vw = text_w(s.value, 22, :bold)
-        note = fit_text(s.note, avail - vw - 8, 10.5, :medium)
+        note = compact ? COMPACT_NOTES.reduce(s.note) { |n, (re, short)| n.sub(re, short) } : s.note
+        note = fit_text(note, avail - vw - 8, 10.5, :medium)
         txt(note, tx + vw + 7, 43, size: 10.5, color: s.note_color, weight: :medium) if vw + 30 < avail
-        @c.hit(x - 6, 14, slot - 8, hh - 32) { open_overlay(stat_overlay(i)) }
+        @c.hit(x - 6, 14, slot - 8, hh - 32) { s.label == "BOTS" ? show_page(:bots) : open_overlay(stat_overlay(i)) }
         fade_vline(x0 + slot * (i + 1) + 4, 20, hh - 24, theme.cyan, alpha: 0.3) if i < stats.size - 1
       end
     end
@@ -270,6 +281,9 @@ module BotOps
         place(:health, "SYSTEM HEALTH", [cx, cy, half, 300], host: health_machine&.dig("host"))
         place(:machines, "MACHINES", [cx + half + Layout::GAP, cy, half, 300])
         place(:live, "LIVE ACTIVITY", [cx, cy + 312, cw, ch - 312])
+      when :bots
+        working = @store.bots.count { |b| b["status"] == "working" }
+        place(:bots, "ASSISTANT BOTS", [cx, cy, cw, ch], right: "#{working} working")
       when :settings
         place(:settings, "SETTINGS", [cx, cy, cw, ch])
       else
@@ -300,7 +314,7 @@ module BotOps
 
     PANEL_ICONS = { sessions: "bot", live: "square-activity", projects: "folder-git-2", tools: "wrench", usage: "chart-line",
                     health: "cpu", prompts: "message-square-text", detail: "info", log: "scroll-text", machines: "server",
-                    settings: "settings" }.freeze
+                    bots: "bot", settings: "settings" }.freeze
 
     # ---- interactions --------------------------------------------------
 
@@ -607,9 +621,11 @@ module BotOps
       true
     end
 
-    # Opens a cloud session's page at claude.ai in the browser.
+    # Opens a cloud session's page at claude.ai (or a bot run's page on an
+    # allowed host) in the browser.
     def open_session_url(url)
-      return unless url.to_s.match?(CloudFeed::SESSION_URL) && @host.respond_to?(:open_url)
+      return unless @host.respond_to?(:open_url)
+      return unless url.to_s.match?(CloudFeed::SESSION_URL) || url.to_s.match?(BotFeed::RUN_URL)
       @host.open_url(url)
     end
 

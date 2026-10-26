@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "yaml"
+require "bot_ops/dot_art"
 
 module BotOps
   # Every colour the dashboard draws comes from the selected theme, a YAML
@@ -27,6 +28,7 @@ module BotOps
       cyan teal blue purple pink yellow orange red green slate white
       text text_detail muted subtle dim tagline
       stat_tile_top stat_tile_bottom cloud
+      dot_off dot_lit
       nav_active_top nav_active_bottom nav_icon nav_text
       pill_top pill_bottom tile_cyan tile_green health_busy
     ].freeze
@@ -37,18 +39,27 @@ module BotOps
     # the usage chart's lines.
     TABLES = %i[status priority levels tools kinds usage].freeze
 
+    # The dot-matrix art a theme may carry (`art:`), all of it optional:
+    # `dot` (the look of unlit cells), `status` (a sprite per bot status)
+    # and `bots` (a sprite per bot name). Each sprite has `rows` and a
+    # `palette` (see DotArt); `image` is reserved for the planned theme
+    # image feature and kept but not drawn. See themes/standard-blue.yml.
+    ART_SECTIONS = %w[status bots].freeze
+    ART_DEFAULT = { "dot" => { "off_alpha" => 0.55, "glow" => true }.freeze, "status" => {}.freeze, "bots" => {}.freeze }.freeze
+
     class Error < StandardError; end
 
     # One loaded theme. Immutable; switching themes replaces Theme.current.
     class Palette
-      attr_reader :slug, :name, :path, :colors, :tables, :series, :mtime
+      attr_reader :slug, :name, :path, :colors, :tables, :series, :art, :mtime
 
-      def initialize(slug:, name:, colors:, tables:, series:, path: nil, mtime: nil)
+      def initialize(slug:, name:, colors:, tables:, series:, art: ART_DEFAULT, path: nil, mtime: nil)
         @slug = slug
         @name = name
         @colors = colors.freeze
         @tables = tables.freeze
         @series = series.freeze
+        @art = art.freeze
         @path = path
         @mtime = mtime
       end
@@ -175,7 +186,8 @@ module BotOps
       colors = resolve_colors(data["colors"] || {}, base, path)
       tables = TABLES.to_h { |t| [t, resolve_table(t, data[t.to_s] || {}, colors, base, path)] }
       series = resolve_series(data["series"], colors, base, path)
-      Palette.new(slug: slug, name: name, colors: colors, tables: tables, series: series, path: path, mtime: File.mtime(path))
+      art = resolve_art(data["art"], colors, base, path)
+      Palette.new(slug: slug, name: name, colors: colors, tables: tables, series: series, art: art, path: path, mtime: File.mtime(path))
     rescue Psych::Exception => e
       raise Error, "#{path}: #{e.message}"
     end
@@ -183,6 +195,7 @@ module BotOps
     KEYS.each { |key| define_singleton_method(key) { current.public_send(key) } }
 
     def self.series = current.series
+    def self.art = current.art
 
     def self.status_color(status)    = current.status_color(status)
     def self.priority_color(level)   = current.priority_color(level)
@@ -255,6 +268,60 @@ module BotOps
           raise Error, "#{path}: series entry #{value.inspect} is not a colour or a colour name" unless c
           c
         end
+      end
+
+      # A colour for `art`: a hex or the name of a colour in this theme.
+      def art_color(value, where, colors, path)
+        s = value.to_s.strip
+        c = s.match?(HEX) ? s.upcase : colors[s.to_sym]
+        raise Error, "#{path}: #{where} is #{value.inspect}, not a colour or a colour name" unless c
+        c
+      end
+
+      # The `art:` section over the base theme's, key by key: a sprite the
+      # file leaves out comes from the base. Nothing at all is fine.
+      def resolve_art(given, colors, base, path)
+        from_base = base ? base.art : ART_DEFAULT
+        return from_base if given.nil?
+        raise Error, "#{path}: `art` must be a mapping" unless given.is_a?(Hash)
+        dot_given = given["dot"] || {}
+        raise Error, "#{path}: `art.dot` must be a mapping" unless dot_given.is_a?(Hash)
+        # YAML reads a bare `off` as false, so the key is quoted in the file; an
+        # unquoted one is taken as meant.
+        dot = from_base["dot"].merge(dot_given.to_h { |k, v| [k == false ? "off" : k.to_s, v] })
+        dot["off"] = art_color(dot["off"], "art.dot.off", colors, path) if dot.key?("off")
+        unless dot["off_alpha"].is_a?(Numeric) && dot["off_alpha"].between?(0, 1)
+          raise Error, "#{path}: art.dot.off_alpha is #{dot['off_alpha'].inspect}, not a number from 0 to 1"
+        end
+        raise Error, "#{path}: art.dot.glow must be true or false" unless [true, false].include?(dot["glow"])
+        art = { "dot" => dot.freeze }
+        ART_SECTIONS.each do |section|
+          rows = given[section] || {}
+          raise Error, "#{path}: `art.#{section}` must be a mapping" unless rows.is_a?(Hash)
+          art[section] = from_base[section].merge(rows.to_h { |name, sp| [name.to_s, resolve_sprite(sp, "art.#{section}.#{name}", colors, path)] }).freeze
+        end
+        art.freeze
+      end
+
+      def resolve_sprite(sp, where, colors, path)
+        raise Error, "#{path}: #{where} must be a mapping with `rows` (or `image`)" unless sp.is_a?(Hash)
+        out = {}
+        out["image"] = sp["image"].to_s if sp.key?("image") # reserved: resolved against Theme.asset_dir one day
+        raise Error, "#{path}: #{where} needs `rows`" unless sp.key?("rows") || sp.key?("image")
+        return out.freeze unless sp.key?("rows")
+        begin
+          cells = DotArt.parse_rows(sp["rows"])
+        rescue ArgumentError => e
+          raise Error, "#{path}: #{where}.rows #{e.message}"
+        end
+        palette = sp["palette"] || {}
+        raise Error, "#{path}: #{where}.palette must be a mapping" unless palette.is_a?(Hash)
+        palette = palette.to_h { |ch, v| [ch.to_s, art_color(v, "#{where}.palette.#{ch}", colors, path)] }
+        missing = cells.flatten.compact.uniq - palette.keys
+        raise Error, "#{path}: #{where}.rows uses #{missing.map(&:inspect).join(', ')}, not in its palette" unless missing.empty?
+        out["rows"] = sp["rows"].map(&:dup).each(&:freeze).freeze
+        out["palette"] = palette.freeze
+        out.freeze
       end
 
       def resolve_table(table, given, colors, base, path)
